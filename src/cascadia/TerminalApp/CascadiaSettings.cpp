@@ -12,6 +12,15 @@ using namespace winrt::Microsoft::Terminal::Settings;
 using namespace ::TerminalApp;
 using namespace winrt::Microsoft::Terminal::TerminalControl;
 using namespace winrt::TerminalApp;
+using namespace Microsoft::Console;
+
+// {2bde4a90-d05f-401c-9492-e40884ead1d8}
+// uuidv5 properties: name format is UTF-16LE bytes
+static constexpr GUID TERMINAL_PROFILE_NAMESPACE_GUID =
+{ 0x2bde4a90, 0xd05f, 0x401c, { 0x94, 0x92, 0xe4, 0x8, 0x84, 0xea, 0xd1, 0xd8 } };
+
+static constexpr std::wstring_view PACKAGED_PROFILE_ICON_PATH{ L"ms-appx:///ProfileIcons/" };
+static constexpr std::wstring_view PACKAGED_PROFILE_ICON_EXTENSION{ L".png" };
 
 CascadiaSettings::CascadiaSettings() :
     _globals{},
@@ -32,15 +41,75 @@ ColorScheme _CreateCampbellScheme()
                                  RGB(12, 12, 12) };
     auto& campbellTable = campbellScheme.GetTable();
     auto campbellSpan = gsl::span<COLORREF>(&campbellTable[0], gsl::narrow<ptrdiff_t>(COLOR_TABLE_SIZE));
-    Microsoft::Console::Utils::InitializeCampbellColorTable(campbellSpan);
-    Microsoft::Console::Utils::SetColorTableAlpha(campbellSpan, 0xff);
+    Utils::InitializeCampbellColorTable(campbellSpan);
+    Utils::SetColorTableAlpha(campbellSpan, 0xff);
 
     return campbellScheme;
 }
 
+ColorScheme _CreateOneHalfDarkScheme()
+{
+    // First 8 dark colors per: https://github.com/sonph/onehalf/blob/master/putty/onehalf-dark.reg
+    // Dark gray is per colortool scheme, the other 7 of the last 8 colors from the colortool
+    // scheme are the same as their dark color equivalents.
+    ColorScheme oneHalfDarkScheme { L"One Half Dark",
+                                    RGB(220, 223, 228),
+                                    RGB( 40,  44,  52) };
+    auto& oneHalfDarkTable = oneHalfDarkScheme.GetTable();
+    auto oneHalfDarkSpan = gsl::span<COLORREF>(&oneHalfDarkTable[0], gsl::narrow<ptrdiff_t>(COLOR_TABLE_SIZE));
+    oneHalfDarkTable[0]  = RGB( 40,  44,  52); // black
+    oneHalfDarkTable[1]  = RGB(224, 108, 117); // dark red
+    oneHalfDarkTable[2]  = RGB(152, 195, 121); // dark green
+    oneHalfDarkTable[3]  = RGB(229, 192, 123); // dark yellow
+    oneHalfDarkTable[4]  = RGB( 97, 175, 239); // dark blue
+    oneHalfDarkTable[5]  = RGB(198, 120, 221); // dark magenta
+    oneHalfDarkTable[6]  = RGB( 86, 182, 194); // dark cyan
+    oneHalfDarkTable[7]  = RGB(220, 223, 228); // gray
+    oneHalfDarkTable[8]  = RGB( 90,  99, 116); // dark gray
+    oneHalfDarkTable[9]  = RGB(224, 108, 117); // red
+    oneHalfDarkTable[10] = RGB(152, 195, 121); // green
+    oneHalfDarkTable[11] = RGB(229, 192, 123); // yellow
+    oneHalfDarkTable[12] = RGB( 97, 175, 239); // blue
+    oneHalfDarkTable[13] = RGB(198, 120, 221); // magenta
+    oneHalfDarkTable[14] = RGB( 86, 182, 194); // cyan
+    oneHalfDarkTable[15] = RGB(220, 223, 228); // white
+    Utils::SetColorTableAlpha(oneHalfDarkSpan, 0xff);
+
+    return oneHalfDarkScheme;
+}
+
+ColorScheme _CreateOneHalfLightScheme()
+{
+    // First 8 dark colors per: https://github.com/sonph/onehalf/blob/master/putty/onehalf-light.reg
+    // Last 8 colors per colortool scheme.
+    ColorScheme oneHalfLightScheme { L"One Half Light",
+                                    RGB(56,  58,  66),
+                                    RGB(250, 250, 250) };
+    auto& oneHalfLightTable = oneHalfLightScheme.GetTable();
+    auto oneHalfLightSpan = gsl::span<COLORREF>(&oneHalfLightTable[0], gsl::narrow<ptrdiff_t>(COLOR_TABLE_SIZE));
+    oneHalfLightTable[0]  = RGB( 56,  58,  66); // black
+    oneHalfLightTable[1]  = RGB(228,  86,  73); // dark red
+    oneHalfLightTable[2]  = RGB( 80, 161,  79); // dark green
+    oneHalfLightTable[3]  = RGB(193, 131,   1); // dark yellow
+    oneHalfLightTable[4]  = RGB(  1, 132, 188); // dark blue
+    oneHalfLightTable[5]  = RGB(166,  38, 164); // dark magenta
+    oneHalfLightTable[6]  = RGB(  9, 151, 179); // dark cyan
+    oneHalfLightTable[7]  = RGB(250, 250, 250); // gray
+    oneHalfLightTable[8]  = RGB( 79,  82,  93); // dark gray
+    oneHalfLightTable[9]  = RGB(223, 108, 117); // red
+    oneHalfLightTable[10] = RGB(152, 195, 121); // green
+    oneHalfLightTable[11] = RGB(228, 192, 122); // yellow
+    oneHalfLightTable[12] = RGB( 97, 175, 239); // blue
+    oneHalfLightTable[13] = RGB(197, 119, 221); // magenta
+    oneHalfLightTable[14] = RGB( 86, 181, 193); // cyan
+    oneHalfLightTable[15] = RGB(255, 255, 255); // white
+    Utils::SetColorTableAlpha(oneHalfLightSpan, 0xff);
+
+    return oneHalfLightScheme;
+}
+
 ColorScheme _CreateSolarizedDarkScheme()
 {
-
     ColorScheme solarizedDarkScheme { L"Solarized Dark",
                                       RGB(253, 246, 227),
                                       RGB(  7, 54,  66) };
@@ -62,7 +131,7 @@ ColorScheme _CreateSolarizedDarkScheme()
     solarizedDarkTable[13] = RGB(108, 113, 196);
     solarizedDarkTable[14] = RGB(147, 161, 161);
     solarizedDarkTable[15] = RGB(253, 246, 227);
-    Microsoft::Console::Utils::SetColorTableAlpha(solarizedDarkSpan, 0xff);
+    Utils::SetColorTableAlpha(solarizedDarkSpan, 0xff);
 
     return solarizedDarkScheme;
 }
@@ -90,15 +159,15 @@ ColorScheme _CreateSolarizedLightScheme()
     solarizedLightTable[13] = RGB(108, 113, 196);
     solarizedLightTable[14] = RGB(147, 161, 161);
     solarizedLightTable[15] = RGB(253, 246, 227);
-    Microsoft::Console::Utils::SetColorTableAlpha(solarizedLightSpan, 0xff);
+    Utils::SetColorTableAlpha(solarizedLightSpan, 0xff);
 
     return solarizedLightScheme;
 }
 
 // Method Description:
 // - Create the set of schemes to use as the default schemes. Currently creates
-//      three default color schemes - Campbell (the new cmd color scheme),
-//      Solarized Dark and Solarized Light.
+//      five default color schemes - Campbell (the new cmd color scheme),
+//      One Half Dark, One Half Light, Solarized Dark, and Solarized Light.
 // Arguments:
 // - <none>
 // Return Value:
@@ -106,6 +175,8 @@ ColorScheme _CreateSolarizedLightScheme()
 void CascadiaSettings::_CreateDefaultSchemes()
 {
     _globals.GetColorSchemes().emplace_back(_CreateCampbellScheme());
+    _globals.GetColorSchemes().emplace_back(_CreateOneHalfDarkScheme());
+    _globals.GetColorSchemes().emplace_back(_CreateOneHalfLightScheme());
     _globals.GetColorSchemes().emplace_back(_CreateSolarizedDarkScheme());
     _globals.GetColorSchemes().emplace_back(_CreateSolarizedLightScheme());
 }
@@ -120,16 +191,15 @@ void CascadiaSettings::_CreateDefaultSchemes()
 // - <none>
 void CascadiaSettings::_CreateDefaultProfiles()
 {
-    Profile cmdProfile{};
+    auto cmdProfile{ _CreateDefaultProfile(L"cmd") };
     cmdProfile.SetFontFace(L"Consolas");
     cmdProfile.SetCommandline(L"cmd.exe");
     cmdProfile.SetStartingDirectory(DEFAULT_STARTING_DIRECTORY);
     cmdProfile.SetColorScheme({ L"Campbell" });
     cmdProfile.SetAcrylicOpacity(0.75);
     cmdProfile.SetUseAcrylic(true);
-    cmdProfile.SetName(L"cmd");
 
-    Profile powershellProfile{};
+    auto powershellProfile{ _CreateDefaultProfile(L"PowerShell") };
     // If the user has installed PowerShell Core, we add PowerShell Core as a default.
     // PowerShell Core default folder is "%PROGRAMFILES%\PowerShell\[Version]\".
     std::wstring psCmdline = L"powershell.exe";
@@ -148,7 +218,6 @@ void CascadiaSettings::_CreateDefaultProfiles()
     powershellProfile.SetColorScheme({ L"Campbell" });
     powershellProfile.SetDefaultBackground(RGB(1, 36, 86));
     powershellProfile.SetUseAcrylic(false);
-    powershellProfile.SetName(L"PowerShell");
 
     _profiles.emplace_back(powershellProfile);
     _profiles.emplace_back(cmdProfile);
@@ -216,17 +285,19 @@ void CascadiaSettings::_CreateDefaultKeybindings()
     keyBindings.SetKeyBinding(ShortcutAction::NewTabProfile8,
                               KeyChord{ KeyModifiers::Ctrl | KeyModifiers::Shift,
                                         static_cast<int>('9') });
-    keyBindings.SetKeyBinding(ShortcutAction::NewTabProfile9,
-                              KeyChord{ KeyModifiers::Ctrl | KeyModifiers::Shift,
-                                        static_cast<int>('0') });
 
     keyBindings.SetKeyBinding(ShortcutAction::ScrollUp,
                               KeyChord{ KeyModifiers::Ctrl | KeyModifiers::Shift,
-                                        VK_PRIOR });
+                                        VK_UP });
     keyBindings.SetKeyBinding(ShortcutAction::ScrollDown,
                               KeyChord{ KeyModifiers::Ctrl | KeyModifiers::Shift,
+                                        VK_DOWN });
+    keyBindings.SetKeyBinding(ShortcutAction::ScrollDownPage,
+                              KeyChord{ KeyModifiers::Ctrl | KeyModifiers::Shift,
                                         VK_NEXT });
-
+    keyBindings.SetKeyBinding(ShortcutAction::ScrollUpPage,
+                              KeyChord{ KeyModifiers::Ctrl | KeyModifiers::Shift,
+                                        VK_PRIOR });
     keyBindings.SetKeyBinding(ShortcutAction::SwitchToTab0,
                               KeyChord{ KeyModifiers::Alt,
                                         static_cast<int>('1') });
@@ -254,9 +325,6 @@ void CascadiaSettings::_CreateDefaultKeybindings()
     keyBindings.SetKeyBinding(ShortcutAction::SwitchToTab8,
                               KeyChord{ KeyModifiers::Alt,
                                         static_cast<int>('9') });
-    keyBindings.SetKeyBinding(ShortcutAction::SwitchToTab9,
-                              KeyChord{ KeyModifiers::Alt,
-                                        static_cast<int>('0') });
 }
 
 // Method Description:
@@ -394,10 +462,33 @@ std::wstring CascadiaSettings::ExpandEnvironmentVariableString(std::wstring_view
     do
     {
         result.resize(requiredSize);
-        requiredSize = ::ExpandEnvironmentStringsW(source.data(), result.data(), static_cast<DWORD>(result.size()));
+        requiredSize = ::ExpandEnvironmentStringsW(source.data(), result.data(), gsl::narrow<DWORD>(result.size()));
     } while (requiredSize != result.size());
 
     // Trim the terminating null character
     result.resize(requiredSize-1);
     return result;
+}
+
+// Method Description:
+// - Helper function for creating a skeleton default profile with a pre-populated
+//   guid and name.
+// Arguments:
+// - name: the name of the new profile.
+// Return Value:
+// - A Profile, ready to be filled in
+Profile CascadiaSettings::_CreateDefaultProfile(const std::wstring_view name)
+{
+    auto profileGuid{ Utils::CreateV5Uuid(TERMINAL_PROFILE_NAMESPACE_GUID, gsl::as_bytes(gsl::make_span(name))) };
+    Profile newProfile{ profileGuid };
+
+    newProfile.SetName(static_cast<std::wstring>(name));
+
+    std::wstring iconPath{ PACKAGED_PROFILE_ICON_PATH };
+    iconPath.append(Utils::GuidToString(profileGuid));
+    iconPath.append(PACKAGED_PROFILE_ICON_EXTENSION);
+
+    newProfile.SetIconPath(iconPath);
+
+    return newProfile;
 }
