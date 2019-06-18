@@ -4,6 +4,7 @@
 #include "pch.h"
 #include "IslandWindow.h"
 #include "../types/inc/Viewport.hpp"
+#include "resource.h"
 
 extern "C" IMAGE_DOS_HEADER __ImageBase;
 
@@ -42,6 +43,7 @@ void IslandWindow::MakeWindow() noexcept
     wc.lpszClassName = XAML_HOSTING_WINDOW_CLASS_NAME;
     wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WndProc;
+    wc.hIcon = LoadIconW(wc.hInstance, MAKEINTRESOURCEW(IDI_APPICON));
     RegisterClass(&wc);
     WINRT_ASSERT(!_window);
 
@@ -49,13 +51,18 @@ void IslandWindow::MakeWindow() noexcept
     // window, the system will give us a chance to set its size in WM_CREATE.
     // WM_CREATE will be handled synchronously, before CreateWindow returns.
     WINRT_VERIFY(CreateWindow(wc.lpszClassName,
-        L"Windows Terminal",
-        WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
-        nullptr, nullptr, wc.hInstance, this));
+                              L"Windows Terminal",
+                              WS_OVERLAPPEDWINDOW,
+                              CW_USEDEFAULT,
+                              CW_USEDEFAULT,
+                              CW_USEDEFAULT,
+                              CW_USEDEFAULT,
+                              nullptr,
+                              nullptr,
+                              wc.hInstance,
+                              this));
 
     WINRT_ASSERT(_window);
-
 }
 
 // Method Description:
@@ -144,10 +151,10 @@ void IslandWindow::OnSize()
     }
 }
 
-LRESULT IslandWindow::MessageHandler(UINT const message, WPARAM const wparam, LPARAM const lparam) noexcept
+[[nodiscard]] LRESULT IslandWindow::MessageHandler(UINT const message, WPARAM const wparam, LPARAM const lparam) noexcept
 {
-    switch (message) {
-
+    switch (message)
+    {
     case WM_CREATE:
     {
         _HandleCreateWindow(wparam, lparam);
@@ -162,6 +169,13 @@ LRESULT IslandWindow::MessageHandler(UINT const message, WPARAM const wparam, LP
             return 0; // eat the message
         }
     }
+    case WM_MENUCHAR:
+    {
+        // GH#891: return this LRESULT here to prevent the app from making a
+        // bell when alt+key is pressed. A menu is active and the user presses a
+        // key that does not correspond to any mnemonic or accelerator key,
+        return MAKELRESULT(0, MNC_CLOSE);
+    }
     }
 
     // TODO: handle messages here...
@@ -173,7 +187,7 @@ LRESULT IslandWindow::MessageHandler(UINT const message, WPARAM const wparam, LP
 // Arguments:
 // - width: the new width of the window _in pixels_
 // - height: the new height of the window _in pixels_
-void IslandWindow::OnResize(const UINT width, const UINT height)
+void IslandWindow::OnResize(const UINT /*width*/, const UINT /*height*/)
 {
     OnSize();
 }

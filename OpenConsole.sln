@@ -71,7 +71,7 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Host.Tests.Unit", "src\host
 		{06EC74CB-9A12-429C-B551-8562EC954747} = {06EC74CB-9A12-429C-B551-8562EC954747}
 	EndProjectSection
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TextBuffer.UnitTests", "src\buffer\out\ut_textbuffer\TextBuffer.UnitTests.vcxproj", "{531C23E7-4B76-4C08-8BBD-04164CB628C9}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TextBuffer.Unit.Tests", "src\buffer\out\ut_textbuffer\TextBuffer.Unit.Tests.vcxproj", "{531C23E7-4B76-4C08-8BBD-04164CB628C9}"
 	ProjectSection(ProjectDependencies) = postProject
 		{0CF235BD-2DA0-407E-90EE-C467E8BBC714} = {0CF235BD-2DA0-407E-90EE-C467E8BBC714}
 	EndProjectSection
@@ -149,6 +149,9 @@ EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "RendererVt", "src\renderer\vt\lib\vt.vcxproj", "{990F2657-8580-4828-943F-5DD657D11842}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "VtPipeTerm", "src\tools\vtpipeterm\VtPipeTerm.vcxproj", "{814DBDDE-894E-4327-A6E1-740504850098}"
+	ProjectSection(ProjectDependencies) = postProject
+		{9CBD7DFA-1754-4A9D-93D7-857A9D17CB1B} = {9CBD7DFA-1754-4A9D-93D7-857A9D17CB1B}
+	EndProjectSection
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ConEchoKey", "src\tools\echokey\ConEchoKey.vcxproj", "{814CBEEE-894E-4327-A6E1-740504850098}"
 EndProject
