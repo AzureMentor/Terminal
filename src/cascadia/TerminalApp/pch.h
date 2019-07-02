@@ -34,12 +34,12 @@
 #include <winrt/Windows.UI.Xaml.Controls.Primitives.h>
 #include <winrt/Windows.ui.xaml.media.h>
 #include <winrt/Windows.ui.xaml.input.h>
+#include <winrt/Windows.UI.Xaml.Hosting.h>
+#include <winrt/Microsoft.Toolkit.Win32.UI.XamlHost.h>
 
 #include <windows.ui.xaml.media.dxinterop.h>
 
 #include <winrt/Windows.System.h>
-#include <winrt/Windows.Storage.h>
-#include <winrt/Windows.Storage.Streams.h>
 
 // Including TraceLogging essentials for the binary
 #include <TraceLoggingProvider.h>
