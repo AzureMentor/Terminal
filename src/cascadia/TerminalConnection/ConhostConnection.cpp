@@ -5,11 +5,6 @@
 #include "ConhostConnection.h"
 #include "windows.h"
 #include <sstream>
-// STARTF_USESTDHANDLES is only defined in WINAPI_PARTITION_DESKTOP
-// We're just gonna manually define it for this prototyping code
-#ifndef STARTF_USESTDHANDLES
-#define STARTF_USESTDHANDLES 0x00000100
-#endif
 
 #include "ConhostConnection.g.cpp"
 
@@ -122,6 +117,8 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
                                           0,
                                           nullptr));
 
+        THROW_LAST_ERROR_IF_NULL(_hOutputThread);
+
         // Wind up the conhost! We only do this after we've got everything in place.
         THROW_LAST_ERROR_IF(-1 == ResumeThread(_piConhost.hThread));
 
@@ -190,14 +187,14 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
 
     DWORD ConhostConnection::_OutputThread()
     {
-        static UTF8OutPipeReader pipeReader{ _outPipe };
+        UTF8OutPipeReader pipeReader{ _outPipe.get() };
         std::string_view strView{};
 
         // process the data of the output pipe in a loop
         while (true)
         {
             HRESULT result = pipeReader.Read(strView);
-            if (FAILED(result))
+            if (FAILED(result) || result == S_FALSE)
             {
                 if (_closing.load())
                 {
@@ -208,7 +205,8 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
                 _disconnectHandlers();
                 return (DWORD)-1;
             }
-            else if (strView.empty())
+
+            if (strView.empty())
             {
                 return 0;
             }
