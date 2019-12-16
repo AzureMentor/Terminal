@@ -87,10 +87,16 @@ void Terminal::CreateFromSettings(winrt::Microsoft::Terminal::Settings::ICoreSet
 {
     const COORD viewportSize{ Utils::ClampToShortMax(settings.InitialCols(), 1),
                               Utils::ClampToShortMax(settings.InitialRows(), 1) };
+
     // TODO:MSFT:20642297 - Support infinite scrollback here, if HistorySize is -1
     Create(viewportSize, Utils::ClampToShortMax(settings.HistorySize(), 0), renderTarget);
 
     UpdateSettings(settings);
+
+    if (_suppressApplicationTitle)
+    {
+        _title = _startingTitle;
+    }
 }
 
 // Method Description:
@@ -139,6 +145,10 @@ void Terminal::UpdateSettings(winrt::Microsoft::Terminal::Settings::ICoreSetting
 
     _copyOnSelect = settings.CopyOnSelect();
 
+    _suppressApplicationTitle = settings.SuppressApplicationTitle();
+
+    _startingTitle = settings.StartingTitle();
+
     // TODO:MSFT:21327402 - if HistorySize has changed, resize the buffer so we
     // have a smaller scrollback. We should do this carefully - if the new buffer
     // size is smaller than where the mutable viewport currently is, we'll want
@@ -178,18 +188,6 @@ void Terminal::UpdateSettings(winrt::Microsoft::Terminal::Settings::ICoreSetting
         proposedTop -= (proposedBottom - bufferSize.Y);
     }
 
-    Cursor& cursor = _buffer->GetCursor();
-    auto cursorPosition = cursor.GetPosition();
-
-    // If the cursor is positioned beyond the range of the viewport, then
-    // set the cursor position to a legal value.
-    cursorPosition.X = std::min(cursorPosition.X, static_cast<SHORT>(viewportSize.X - 1));
-    cursorPosition.Y = std::min(cursorPosition.Y, static_cast<SHORT>(viewportSize.Y - 1));
-
-    cursor.StartDeferDrawing();
-    cursor.SetPosition(cursorPosition);
-    cursor.EndDeferDrawing();
-
     _mutableViewport = Viewport::FromDimensions({ 0, proposedTop }, viewportSize);
     _scrollOffset = 0;
     _NotifyScrollEvent();
@@ -202,6 +200,24 @@ void Terminal::Write(std::wstring_view stringView)
     auto lock = LockForWriting();
 
     _stateMachine->ProcessString(stringView.data(), stringView.size());
+}
+
+// Method Description:
+// - Attempts to snap to the bottom of the buffer, if SnapOnInput is true. Does
+//   nothing if SnapOnInput is set to false, or we're already at the bottom of
+//   the buffer.
+// Arguments:
+// - <none>
+// Return Value:
+// - <none>
+void Terminal::TrySnapOnInput()
+{
+    if (_snapOnInput && _scrollOffset != 0)
+    {
+        auto lock = LockForWriting();
+        _scrollOffset = 0;
+        _NotifyScrollEvent();
+    }
 }
 
 // Method Description:
@@ -219,12 +235,7 @@ void Terminal::Write(std::wstring_view stringView)
 // - false if we did not translate the key, and it should be processed into a character.
 bool Terminal::SendKeyEvent(const WORD vkey, const WORD scanCode, const ControlKeyStates states)
 {
-    if (_snapOnInput && _scrollOffset != 0)
-    {
-        auto lock = LockForWriting();
-        _scrollOffset = 0;
-        _NotifyScrollEvent();
-    }
+    TrySnapOnInput();
 
     // Alt key sequences _require_ the char to be in the keyevent. If alt is
     // pressed, manually get the character that's being typed, and put it in the
@@ -306,13 +317,19 @@ wchar_t Terminal::_CharacterFromKeyEvent(const WORD vkey, const WORD scanCode, c
     keyState[VK_CONTROL] = states.IsCtrlPressed() ? 0x80 : 0;
     keyState[VK_MENU] = states.IsAltPressed() ? 0x80 : 0;
 
+    // For the following use of ToUnicodeEx() please look here:
+    //   https://docs.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-tounicodeex
+
     // Technically ToUnicodeEx() can produce arbitrarily long sequences of diacritics etc.
     // Since we only handle the case of a single UTF-16 code point, we can set the buffer size to 2 though.
     constexpr size_t bufferSize = 2;
     wchar_t buffer[bufferSize];
 
-    // wFlags: If bit 2 is set, keyboard state is not changed (Windows 10, version 1607 and newer)
-    const auto result = ToUnicodeEx(vkey, sc, keyState, buffer, bufferSize, 0b100, nullptr);
+    // wFlags:
+    // * If bit 0 is set, a menu is active.
+    //   If this flag is not specified ToUnicodeEx will send us character events on certain Alt+Key combinations (e.g. Alt+Arrow-Up).
+    // * If bit 2 is set, keyboard state is not changed (Windows 10, version 1607 and newer)
+    const auto result = ToUnicodeEx(vkey, sc, keyState, buffer, bufferSize, 0b101, nullptr);
 
     // TODO:GH#2853 We're only handling single UTF-16 code points right now, since that's the only thing KeyEvent supports.
     return result == 1 || result == -1 ? buffer[0] : 0;
@@ -437,11 +454,6 @@ void Terminal::_WriteBuffer(const std::wstring_view& stringView)
             }
         }
 
-        if (proposedCursorPosition.X > bufferSize.RightInclusive())
-        {
-            proposedCursorPosition.X = 0;
-        }
-
         // If we're about to scroll past the bottom of the buffer, instead cycle the buffer.
         const auto newRows = proposedCursorPosition.Y - bufferSize.Height() + 1;
         if (newRows > 0)
@@ -550,8 +562,6 @@ void Terminal::_InitializeColorTable()
 // - isVisible: whether the cursor should be visible
 void Terminal::SetCursorVisible(const bool isVisible) noexcept
 {
-    auto lock = LockForWriting();
-
     auto& cursor = _buffer->GetCursor();
     cursor.SetIsVisible(isVisible);
 }

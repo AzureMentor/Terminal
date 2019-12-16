@@ -365,12 +365,9 @@ bool Terminal::EraseInDisplay(const DispatchTypes::EraseType eraseType)
 
 bool Terminal::SetWindowTitle(std::wstring_view title)
 {
-    _title = title;
+    _title = _suppressApplicationTitle ? _startingTitle : title;
 
-    if (_pfnTitleChanged)
-    {
-        _pfnTitleChanged(title);
-    }
+    _pfnTitleChanged(_title);
 
     return true;
 }
@@ -385,15 +382,18 @@ bool Terminal::SetWindowTitle(std::wstring_view title)
 // - true iff we successfully updated the color table entry.
 bool Terminal::SetColorTableEntry(const size_t tableIndex, const COLORREF dwColor)
 {
-    if (tableIndex > _colorTable.size())
+    try
+    {
+        _colorTable.at(tableIndex) = dwColor;
+
+        // Repaint everything - the colors might have changed
+        _buffer->GetRenderTarget().TriggerRedrawAll();
+        return true;
+    }
+    catch (std::out_of_range&)
     {
         return false;
     }
-    _colorTable.at(tableIndex) = dwColor;
-
-    // Repaint everything - the colors might have changed
-    _buffer->GetRenderTarget().TriggerRedrawAll();
-    return true;
 }
 
 // Method Description:

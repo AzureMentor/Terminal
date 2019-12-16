@@ -199,6 +199,119 @@ like to hide all the WSL profiles, you could add the following setting:
 
 ```
 
+### Default settings
+
+In [#2325](https://github.com/microsoft/terminal/issues/2325), we introduced the
+concept of "Default Profile Settings". These are settings that will apply to all
+of your profiles by default. Profiles can still override these settings
+individually. With default profile settings, you can easily make changes to all
+your profiles at once. For example, given the following settings:
+
+```json
+    "defaultProfile": "{61c54bbd-c2c6-5271-96e7-009a87ff44bf}",
+    "profiles":
+    [
+        {
+            "guid": "{61c54bbd-c2c6-5271-96e7-009a87ff44bf}",
+            "name": "Windows PowerShell",
+            "commandline": "powershell.exe",
+            "fontFace": "Cascadia Code",
+            "fontSize": 14
+        },
+        {
+            "guid": "{0caa0dad-35be-5f56-a8ff-afceeeaa6101}",
+            "name": "cmd",
+            "commandline": "cmd.exe",
+            "fontFace": "Cascadia Code",
+            "fontSize": 14
+        },
+        {
+            "commandline" : "cmd.exe /k %CMDER_ROOT%\\vendor\\init.bat",
+            "name" : "cmder",
+            "startingDirectory" : "%USERPROFILE%",
+            "fontFace": "Cascadia Code",
+            "fontSize": 14
+        }
+    ],
+```
+
+All three of these profiles are using "Cascadia Code" as their `"fontFace"`, and
+14 as their `fontSize`. With default profile settings, you can easily set these
+properties for all your profiles, like so:
+
+```json
+    "defaultProfile": "{61c54bbd-c2c6-5271-96e7-009a87ff44bf}",
+    "profiles": {
+        "defaults":
+        {
+            "fontFace": "Cascadia Code",
+            "fontSize": 14
+        },
+        "list": [
+            {
+                "guid": "{61c54bbd-c2c6-5271-96e7-009a87ff44bf}",
+                "name": "Windows PowerShell",
+                "commandline": "powershell.exe",
+            },
+            {
+                "guid": "{0caa0dad-35be-5f56-a8ff-afceeeaa6101}",
+                "name": "cmd",
+                "commandline": "cmd.exe"
+            },
+            {
+                "commandline" : "cmd.exe /k %CMDER_ROOT%\\vendor\\init.bat",
+                "name" : "cmder",
+                "startingDirectory" : "%USERPROFILE%"
+            }
+        ],
+    }
+```
+
+Note that the `profiles` property has changed in this example from a _list_ of
+profiles, to an _object_ with two properties:
+* a `list` that contains the list of all the profiles
+* the new `defaults` object, which contains all the settings that should apply to
+  every profile.
+
+What if I wanted a profile to have a different value for a property other than
+the default? Simply set the property in the profile's entry to override the
+value from `defaults`. Let's say you want the `cmd` profile to have _"Consolas"_
+as the font, but the rest of your profiles to still have _"Cascadia Code"_. You
+could achieve that with the following:
+
+```json
+    "defaultProfile": "{61c54bbd-c2c6-5271-96e7-009a87ff44bf}",
+    "profiles": {
+        "defaults":
+        {
+            "fontFace": "Cascadia Code",
+            "fontSize": 14
+        },
+        "list": [
+            {
+                "guid": "{61c54bbd-c2c6-5271-96e7-009a87ff44bf}",
+                "name": "Windows PowerShell",
+                "commandline": "powershell.exe",
+            },
+            {
+                "guid": "{0caa0dad-35be-5f56-a8ff-afceeeaa6101}",
+                "name": "cmd",
+                "commandline": "cmd.exe",
+                "fontFace": "Consolas"
+            },
+            {
+                "commandline" : "cmd.exe /k %CMDER_ROOT%\\vendor\\init.bat",
+                "name" : "cmder",
+                "startingDirectory" : "%USERPROFILE%"
+            }
+        ],
+    }
+```
+
+In the above settings, the `"fontFace"` in the `cmd.exe` profile overrides the
+`"fontFace"` from the `defaults`.
+
+
 ## Configuration Examples:
 
 ### Add a custom background to the WSL Debian terminal profile
@@ -282,3 +395,28 @@ an interrupt to the commandline application using <kbd>Ctrl+C</kbd> when there's
 no text selection. Additionally, if you set `paste` to `"ctrl+v"`, commandline
 applications won't be able to read a ctrl+v from the input. For these reasons,
 we suggest `"ctrl+shift+c"` and `"ctrl+shift+v"`
+
+
+### Setting the `startingDirectory` of WSL Profiles to `~`
+
+By default, the `startingDirectory` of a profile is `%USERPROFILE%`
+(`C:\Users\<YourUsername>`). This is a Windows path. However, for WSL, you might
+want to use the WSL home path instead. At the time of writing (26decf1 / Nov.
+1st, 2019), `startingDirectory` only accepts a Windows-style path, so setting it
+to start within the WSL distro can be a little tricky.
+
+Fortunately, with Windows 1903, the filesystems of WSL distros can easily be
+addressed using the `\\wsl$\` prefix. For any WSL distro whose name is
+`DistroName`, you can use `\\wsl$\DistroName` as a Windows path that points to
+the root of that distro's filesystem.
+
+For example, the following works as a profile to launch the "Ubuntu-18.04"
+distro in it's home path:
+
+```json
+{
+    "name": "Ubuntu-18.04",
+    "commandline" : "wsl -d Ubuntu-18.04",
+    "startingDirectory" : "//wsl$/Ubuntu-18.04/home/<Your Ubuntu Username>",
+}
+```

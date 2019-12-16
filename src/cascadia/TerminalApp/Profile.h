@@ -35,6 +35,13 @@ constexpr GUID RUNTIME_GENERATED_PROFILE_NAMESPACE_GUID = { 0xf65ddb7e, 0x706b, 
 namespace TerminalApp
 {
     class Profile;
+
+    enum class CloseOnExitMode
+    {
+        Never = 0,
+        Graceful,
+        Always
+    };
 };
 
 class TerminalApp::Profile final
@@ -57,7 +64,7 @@ public:
 
     bool HasGuid() const noexcept;
     bool HasSource() const noexcept;
-    GUID GetGuid() const noexcept;
+    GUID GetGuid() const;
     void SetSource(std::wstring_view sourceNamespace) noexcept;
     std::wstring_view GetName() const noexcept;
     bool HasConnectionType() const noexcept;
@@ -67,6 +74,7 @@ public:
     void SetColorScheme(std::optional<std::wstring> schemeName) noexcept;
     std::optional<std::wstring>& GetSchemeName() noexcept;
     void SetTabTitle(std::wstring tabTitle) noexcept;
+    void SetSuppressApplicationTitle(bool suppressApplicationTitle) noexcept;
     void SetAcrylicOpacity(double opacity) noexcept;
     void SetCommandline(std::wstring cmdline) noexcept;
     void SetStartingDirectory(std::wstring startingDirectory) noexcept;
@@ -74,19 +82,26 @@ public:
     void SetUseAcrylic(bool useAcrylic) noexcept;
     void SetDefaultForeground(COLORREF defaultForeground) noexcept;
     void SetDefaultBackground(COLORREF defaultBackground) noexcept;
-    void SetCloseOnExit(bool defaultClose) noexcept;
+    void SetSelectionBackground(COLORREF selectionBackground) noexcept;
+    void SetCloseOnExitMode(CloseOnExitMode mode) noexcept;
     void SetConnectionType(GUID connectionType) noexcept;
 
     bool HasIcon() const noexcept;
     winrt::hstring GetExpandedIconPath() const;
     void SetIconPath(std::wstring_view path);
 
-    bool GetCloseOnExit() const noexcept;
+    bool HasBackgroundImage() const noexcept;
+    winrt::hstring GetExpandedBackgroundImagePath() const;
+
+    CloseOnExitMode GetCloseOnExitMode() const noexcept;
+    bool GetSuppressApplicationTitle() const noexcept;
     bool IsHidden() const noexcept;
 
     void GenerateGuidIfNecessary() noexcept;
 
     static GUID GetGuidOrGenerateForJson(const Json::Value& json) noexcept;
+
+    void SetRetroTerminalEffect(bool value) noexcept;
 
 private:
     static std::wstring EvaluateStartingDirectory(const std::wstring& directory);
@@ -98,11 +113,16 @@ private:
     static std::tuple<winrt::Windows::UI::Xaml::HorizontalAlignment, winrt::Windows::UI::Xaml::VerticalAlignment> ParseImageAlignment(const std::string_view imageAlignment);
     static std::tuple<winrt::Windows::UI::Xaml::HorizontalAlignment, winrt::Windows::UI::Xaml::VerticalAlignment> _ConvertJsonToAlignment(const Json::Value& json);
 
+    static CloseOnExitMode ParseCloseOnExitMode(const Json::Value& json);
+    static std::string_view _SerializeCloseOnExitMode(const CloseOnExitMode closeOnExitMode);
+
     static std::string_view SerializeImageAlignment(const std::tuple<winrt::Windows::UI::Xaml::HorizontalAlignment, winrt::Windows::UI::Xaml::VerticalAlignment> imageAlignment);
     static winrt::Microsoft::Terminal::Settings::CursorStyle _ParseCursorShape(const std::wstring& cursorShapeString);
     static std::wstring_view _SerializeCursorStyle(const winrt::Microsoft::Terminal::Settings::CursorStyle cursorShape);
 
     static GUID _GenerateGuidForProfile(const std::wstring& name, const std::optional<std::wstring>& source) noexcept;
+
+    static bool _ConvertJsonToBool(const Json::Value& json);
 
     std::optional<GUID> _guid{ std::nullopt };
     std::optional<std::wstring> _source{ std::nullopt };
@@ -115,8 +135,10 @@ private:
 
     std::optional<uint32_t> _defaultForeground;
     std::optional<uint32_t> _defaultBackground;
+    std::optional<uint32_t> _selectionBackground;
     std::array<uint32_t, COLOR_TABLE_SIZE> _colorTable;
     std::optional<std::wstring> _tabTitle;
+    bool _suppressApplicationTitle;
     int32_t _historySize;
     bool _snapOnInput;
     uint32_t _cursorColor;
@@ -136,7 +158,7 @@ private:
     std::optional<std::tuple<winrt::Windows::UI::Xaml::HorizontalAlignment, winrt::Windows::UI::Xaml::VerticalAlignment>> _backgroundImageAlignment;
 
     std::optional<std::wstring> _scrollbarState;
-    bool _closeOnExit;
+    CloseOnExitMode _closeOnExitMode;
     std::wstring _padding;
 
     std::optional<std::wstring> _icon;
@@ -145,4 +167,6 @@ private:
     friend class TerminalAppLocalTests::ProfileTests;
     friend class TerminalAppUnitTests::JsonTests;
     friend class TerminalAppUnitTests::DynamicProfileTests;
+
+    std::optional<bool> _retroTerminalEffect;
 };

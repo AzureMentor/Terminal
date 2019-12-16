@@ -27,17 +27,14 @@ AdaptDispatch::AdaptDispatch(ConGetSet* const pConApi,
                              AdaptDefaults* const pDefaults) :
     _conApi{ THROW_IF_NULL_ALLOC(pConApi) },
     _pDefaults{ THROW_IF_NULL_ALLOC(pDefaults) },
+    _usingAltBuffer(false),
     _fIsOriginModeRelative(false), // by default, the DECOM origin mode is absolute.
-    _fIsSavedOriginModeRelative(false), // as is the origin mode of the saved cursor position.
     _fIsDECCOLMAllowed(false), // by default, DECCOLM is not allowed.
     _fChangedBackground(false),
     _fChangedForeground(false),
     _fChangedMetaAttrs(false),
     _TermOutput()
 {
-    // The top-left corner in VT-speak is 1,1. Our internal array uses 0 indexes, but VT uses 1,1 for top left corner.
-    _coordSavedCursor.X = 1;
-    _coordSavedCursor.Y = 1;
     _srScrollMargins = { 0 }; // initially, there are no scroll margins.
 }
 
@@ -415,12 +412,14 @@ bool AdaptDispatch::CursorPosition(_In_ unsigned int const uiLine, _In_ unsigned
 }
 
 // Routine Description:
-// - DECSC - Saves the current cursor position into a memory buffer.
+// - DECSC - Saves the current "cursor state" into a memory buffer. This
+//   includes the cursor position, origin mode, graphic rendition, and
+//   active character set.
 // Arguments:
 // - <none>
 // Return Value:
 // - True if handled successfully. False otherwise.
-bool AdaptDispatch::CursorSavePosition()
+bool AdaptDispatch::CursorSaveState()
 {
     // First retrieve some information about the buffer
     CONSOLE_SCREEN_BUFFER_INFOEX csbiex = { 0 };
@@ -428,6 +427,9 @@ bool AdaptDispatch::CursorSavePosition()
     // Make sure to reset the viewport (with MoveToBottom )to where it was
     //      before the user scrolled the console output
     bool fSuccess = !!(_conApi->MoveToBottom() && _conApi->GetConsoleScreenBufferInfoEx(&csbiex));
+
+    TextAttribute attributes;
+    fSuccess = fSuccess && !!(_conApi->PrivateGetTextAttributes(&attributes));
 
     if (fSuccess)
     {
@@ -438,32 +440,53 @@ bool AdaptDispatch::CursorSavePosition()
         SMALL_RECT const srViewport = csbiex.srWindow;
 
         // VT is also 1 based, not 0 based, so correct by 1.
-        _coordSavedCursor.X = coordCursor.X - srViewport.Left + 1;
-        _coordSavedCursor.Y = coordCursor.Y - srViewport.Top + 1;
-        _fIsSavedOriginModeRelative = _fIsOriginModeRelative;
+        auto& savedCursorState = _savedCursorState[_usingAltBuffer];
+        savedCursorState.Column = coordCursor.X - srViewport.Left + 1;
+        savedCursorState.Row = coordCursor.Y - srViewport.Top + 1;
+        savedCursorState.IsOriginModeRelative = _fIsOriginModeRelative;
+        savedCursorState.Attributes = attributes;
+        savedCursorState.TermOutput = _TermOutput;
     }
 
     return fSuccess;
 }
 
 // Routine Description:
-// - DECRC - Restores a saved cursor position from the DECSC command back into the console state.
-// - If no position was set, this defaults to the top left corner (see AdaptDispatch constructor.)
+// - DECRC - Restores a saved "cursor state" from the DECSC command back into
+//   the console state. This includes the cursor position, origin mode, graphic
+//   rendition, and active character set.
 // Arguments:
 // - <none>
 // Return Value:
 // - True if handled successfully. False otherwise.
-bool AdaptDispatch::CursorRestorePosition()
+bool AdaptDispatch::CursorRestoreState()
 {
-    unsigned int const uiRow = _coordSavedCursor.Y;
-    unsigned int const uiCol = _coordSavedCursor.X;
+    auto& savedCursorState = _savedCursorState[_usingAltBuffer];
+
+    auto uiRow = savedCursorState.Row;
+    auto uiCol = savedCursorState.Column;
+
+    // If the origin mode is relative, and the scrolling region is set (the bottom is non-zero),
+    // we need to make sure the restored position is clamped within the margins.
+    if (savedCursorState.IsOriginModeRelative && _srScrollMargins.Bottom != 0)
+    {
+        // VT origin is at 1,1 so we need to add 1 to these margins.
+        uiRow = std::clamp(uiRow, _srScrollMargins.Top + 1u, _srScrollMargins.Bottom + 1u);
+    }
 
     // The saved coordinates are always absolute, so we need reset the origin mode temporarily.
     _fIsOriginModeRelative = false;
-    bool const fSuccess = _CursorMovePosition(&uiRow, &uiCol);
+    bool fSuccess = _CursorMovePosition(&uiRow, &uiCol);
 
     // Once the cursor position is restored, we can then restore the actual origin mode.
-    _fIsOriginModeRelative = _fIsSavedOriginModeRelative;
+    _fIsOriginModeRelative = savedCursorState.IsOriginModeRelative;
+
+    // Restore text attributes.
+    fSuccess = !!(_conApi->PrivateSetTextAttributes(savedCursorState.Attributes)) && fSuccess;
+
+    // Restore designated character set.
+    _TermOutput = savedCursorState.TermOutput;
+
     return fSuccess;
 }
 
@@ -516,11 +539,6 @@ bool AdaptDispatch::_InsertDeleteHelper(_In_ unsigned int const uiCount, const b
     coordDestination.Y = cursor.Y;
     coordDestination.X = cursor.X;
 
-    // Fill character for remaining space left behind by "cut" operation (or for fill if we "cut" the entire line)
-    CHAR_INFO ciFill;
-    ciFill.Attributes = csbiex.wAttributes;
-    ciFill.Char.UnicodeChar = L' ';
-
     bool fSuccess = false;
     if (fIsInsert)
     {
@@ -535,10 +553,8 @@ bool AdaptDispatch::_InsertDeleteHelper(_In_ unsigned int const uiCount, const b
 
     if (fSuccess)
     {
-        fSuccess = !!_conApi->ScrollConsoleScreenBufferW(&srScroll,
-                                                         &srScroll,
-                                                         coordDestination,
-                                                         &ciFill);
+        // Note the revealed characters are filled with the standard erase attributes.
+        fSuccess = !!_conApi->PrivateScrollRegion(srScroll, srScroll, coordDestination, true);
     }
 
     return fSuccess;
@@ -567,54 +583,6 @@ bool AdaptDispatch::DeleteCharacter(_In_ unsigned int const uiCount)
 {
     return _InsertDeleteHelper(uiCount, false);
 }
-// Routine Description:
-// - Internal helper to erase a specific number of characters in one particular line of the buffer.
-//     Erased positions are replaced with spaces.
-// Arguments:
-// - coordStartPosition - The position to begin erasing at.
-// - dwLength - the number of characters to erase.
-// - wFillColor - The attributes to apply to the erased positions.
-// Return Value:
-// - True if handled successfully. False otherwise.
-bool AdaptDispatch::_EraseSingleLineDistanceHelper(const COORD coordStartPosition, const DWORD dwLength, const WORD wFillColor) const
-{
-    WCHAR const wchSpace = static_cast<WCHAR>(0x20); // space character. use 0x20 instead of literal space because we can't assume the compiler will always turn ' ' into 0x20.
-
-    size_t written = 0;
-    bool fSuccess = !!_conApi->FillConsoleOutputCharacterW(wchSpace, dwLength, coordStartPosition, written);
-
-    if (fSuccess)
-    {
-        fSuccess = !!_conApi->FillConsoleOutputAttribute(wFillColor, dwLength, coordStartPosition, written);
-    }
-
-    return fSuccess;
-}
-
-bool AdaptDispatch::_EraseAreaHelper(const COORD coordStartPosition, const COORD coordLastPosition, const WORD wFillColor)
-{
-    WCHAR const wchSpace = static_cast<WCHAR>(0x20); // space character. use 0x20 instead of literal space because we can't assume the compiler will always turn ' ' into 0x20.
-
-    size_t written = 0;
-    FAIL_FAST_IF(!(coordStartPosition.X < coordLastPosition.X));
-    FAIL_FAST_IF(!(coordStartPosition.Y < coordLastPosition.Y));
-    bool fSuccess = false;
-    for (short y = coordStartPosition.Y; y < coordLastPosition.Y; y++)
-    {
-        const COORD coordLine = { coordStartPosition.X, y };
-        fSuccess = !!_conApi->FillConsoleOutputCharacterW(wchSpace, coordLastPosition.X - coordStartPosition.X, coordLine, written);
-        if (fSuccess)
-        {
-            fSuccess = !!_conApi->FillConsoleOutputAttribute(wFillColor, coordLastPosition.X - coordStartPosition.X, coordLine, written);
-        }
-
-        if (!fSuccess)
-        {
-            break;
-        }
-    }
-    return fSuccess;
-}
 
 // Routine Description:
 // - Internal helper to erase one particular line of the buffer. Either from beginning to the cursor, from the cursor to the end, or the entire line.
@@ -626,7 +594,7 @@ bool AdaptDispatch::_EraseAreaHelper(const COORD coordStartPosition, const COORD
 //           - This is not aware of circular buffer. Line 0 is always the top visible line if you scrolled the whole way up the window.
 // Return Value:
 // - True if handled successfully. False otherwise.
-bool AdaptDispatch::_EraseSingleLineHelper(const CONSOLE_SCREEN_BUFFER_INFOEX* const pcsbiex, const DispatchTypes::EraseType eraseType, const SHORT sLineId, const WORD wFillColor) const
+bool AdaptDispatch::_EraseSingleLineHelper(const CONSOLE_SCREEN_BUFFER_INFOEX* const pcsbiex, const DispatchTypes::EraseType eraseType, const SHORT sLineId) const
 {
     COORD coordStartPosition = { 0 };
     coordStartPosition.Y = sLineId;
@@ -637,7 +605,7 @@ bool AdaptDispatch::_EraseSingleLineHelper(const CONSOLE_SCREEN_BUFFER_INFOEX* c
     {
     case DispatchTypes::EraseType::FromBeginning:
     case DispatchTypes::EraseType::All:
-        coordStartPosition.X = pcsbiex->srWindow.Left; // from beginning and the whole line start from the left viewport edge.
+        coordStartPosition.X = 0; // from beginning and the whole line start from the left most edge of the buffer.
         break;
     case DispatchTypes::EraseType::ToEnd:
         coordStartPosition.X = pcsbiex->dwCursorPosition.X; // from the current cursor position (including it)
@@ -651,16 +619,17 @@ bool AdaptDispatch::_EraseSingleLineHelper(const CONSOLE_SCREEN_BUFFER_INFOEX* c
     {
     case DispatchTypes::EraseType::FromBeginning:
         // +1 because if cursor were at the left edge, the length would be 0 and we want to paint at least the 1 character the cursor is on.
-        nLength = (pcsbiex->dwCursorPosition.X - pcsbiex->srWindow.Left) + 1;
+        nLength = pcsbiex->dwCursorPosition.X + 1;
         break;
     case DispatchTypes::EraseType::ToEnd:
     case DispatchTypes::EraseType::All:
-        // Remember the .Right value is 1 farther than the right most displayed character in the viewport. Therefore no +1.
-        nLength = pcsbiex->srWindow.Right - coordStartPosition.X;
+        // Remember the .X value is 1 farther than the right most column in the buffer. Therefore no +1.
+        nLength = pcsbiex->dwSize.X - coordStartPosition.X;
         break;
     }
 
-    return _EraseSingleLineDistanceHelper(coordStartPosition, nLength, wFillColor);
+    // Note that the region is filled with the standard erase attributes.
+    return !!_conApi->PrivateFillRegion(coordStartPosition, nLength, L' ', true);
 }
 
 // Routine Description:
@@ -682,12 +651,13 @@ bool AdaptDispatch::EraseCharacters(_In_ unsigned int const uiNumChars)
     {
         const COORD coordStartPosition = csbiex.dwCursorPosition;
 
-        const SHORT sRemainingSpaces = csbiex.srWindow.Right - coordStartPosition.X;
+        const SHORT sRemainingSpaces = csbiex.dwSize.X - coordStartPosition.X;
         const unsigned short usActualRemaining = (sRemainingSpaces < 0) ? 0 : sRemainingSpaces;
         // erase at max the number of characters remaining in the line from the current position.
         const DWORD dwEraseLength = (uiNumChars <= usActualRemaining) ? uiNumChars : usActualRemaining;
 
-        fSuccess = _EraseSingleLineDistanceHelper(coordStartPosition, dwEraseLength, csbiex.wAttributes);
+        // Note that the region is filled with the standard erase attributes.
+        fSuccess = !!_conApi->PrivateFillRegion(coordStartPosition, dwEraseLength, L' ', true);
     }
     return fSuccess;
 }
@@ -741,7 +711,7 @@ bool AdaptDispatch::EraseInDisplay(const DispatchTypes::EraseType eraseType)
             // For beginning and all, erase all complete lines before (above vertically) from the cursor position.
             for (SHORT sStartLine = csbiex.srWindow.Top; sStartLine < csbiex.dwCursorPosition.Y; sStartLine++)
             {
-                fSuccess = _EraseSingleLineHelper(&csbiex, DispatchTypes::EraseType::All, sStartLine, csbiex.wAttributes);
+                fSuccess = _EraseSingleLineHelper(&csbiex, DispatchTypes::EraseType::All, sStartLine);
 
                 if (!fSuccess)
                 {
@@ -753,7 +723,7 @@ bool AdaptDispatch::EraseInDisplay(const DispatchTypes::EraseType eraseType)
         if (fSuccess)
         {
             // 2. Cursor Line
-            fSuccess = _EraseSingleLineHelper(&csbiex, eraseType, csbiex.dwCursorPosition.Y, csbiex.wAttributes);
+            fSuccess = _EraseSingleLineHelper(&csbiex, eraseType, csbiex.dwCursorPosition.Y);
         }
 
         if (fSuccess)
@@ -765,7 +735,7 @@ bool AdaptDispatch::EraseInDisplay(const DispatchTypes::EraseType eraseType)
                 // Remember that the viewport bottom value is 1 beyond the viewable area of the viewport.
                 for (SHORT sStartLine = csbiex.dwCursorPosition.Y + 1; sStartLine < csbiex.srWindow.Bottom; sStartLine++)
                 {
-                    fSuccess = _EraseSingleLineHelper(&csbiex, DispatchTypes::EraseType::All, sStartLine, csbiex.wAttributes);
+                    fSuccess = _EraseSingleLineHelper(&csbiex, DispatchTypes::EraseType::All, sStartLine);
 
                     if (!fSuccess)
                     {
@@ -793,7 +763,7 @@ bool AdaptDispatch::EraseInLine(const DispatchTypes::EraseType eraseType)
 
     if (fSuccess)
     {
-        fSuccess = _EraseSingleLineHelper(&csbiex, eraseType, csbiex.dwCursorPosition.Y, csbiex.wAttributes);
+        fSuccess = _EraseSingleLineHelper(&csbiex, eraseType, csbiex.dwCursorPosition.Y);
     }
 
     return fSuccess;
@@ -963,11 +933,8 @@ bool AdaptDispatch::_ScrollMovement(const ScrollDirection sdDirection, _In_ unsi
             coordDestination.X = srScreen.Left;
             coordDestination.Y = srScreen.Top + sDistance * (sdDirection == ScrollDirection::Up ? -1 : 1);
 
-            // Fill character for remaining space left behind by "cut" operation (or for fill if we "cut" the entire line)
-            CHAR_INFO ciFill;
-            ciFill.Attributes = csbiex.wAttributes;
-            ciFill.Char.UnicodeChar = L' ';
-            fSuccess = !!_conApi->ScrollConsoleScreenBufferW(&srScreen, &srScreen, coordDestination, &ciFill);
+            // Note the revealed lines are filled with the standard erase attributes.
+            fSuccess = !!_conApi->PrivateScrollRegion(srScreen, srScreen, coordDestination, true);
         }
     }
 
@@ -1349,7 +1316,16 @@ bool AdaptDispatch::SetWindowTitle(std::wstring_view title)
 // - True if handled successfully. False otherwise.
 bool AdaptDispatch::UseAlternateScreenBuffer()
 {
-    return !!_conApi->PrivateUseAlternateScreenBuffer();
+    bool fSuccess = CursorSaveState();
+    if (fSuccess)
+    {
+        fSuccess = !!_conApi->PrivateUseAlternateScreenBuffer();
+        if (fSuccess)
+        {
+            _usingAltBuffer = true;
+        }
+    }
+    return fSuccess;
 }
 
 // Routine Description:
@@ -1361,7 +1337,16 @@ bool AdaptDispatch::UseAlternateScreenBuffer()
 // - True if handled successfully. False otherwise.
 bool AdaptDispatch::UseMainScreenBuffer()
 {
-    return !!_conApi->PrivateUseMainScreenBuffer();
+    bool fSuccess = !!_conApi->PrivateUseMainScreenBuffer();
+    if (fSuccess)
+    {
+        _usingAltBuffer = false;
+        if (fSuccess)
+        {
+            fSuccess = CursorRestoreState();
+        }
+    }
+    return fSuccess;
 }
 
 //Routine Description:
@@ -1501,9 +1486,11 @@ bool AdaptDispatch::SoftReset()
     }
     if (fSuccess)
     {
-        // Save cursor state: Home position; Absolute addressing.
-        _coordSavedCursor = { 1, 1 };
-        _fIsSavedOriginModeRelative = false;
+        // Reset the saved cursor state.
+        // Note that XTerm only resets the main buffer state, but that
+        // seems likely to be a bug. Most other terminals reset both.
+        _savedCursorState[0] = {}; // Main buffer
+        _savedCursorState[1] = {}; // Alt buffer
     }
 
     return fSuccess;
@@ -1578,64 +1565,47 @@ bool AdaptDispatch::_EraseScrollback()
     if (fSuccess)
     {
         const SMALL_RECT Screen = csbiex.srWindow;
-        const short sWidth = Screen.Right - Screen.Left;
         const short sHeight = Screen.Bottom - Screen.Top;
-        FAIL_FAST_IF(!(sWidth > 0 && sHeight > 0));
+        FAIL_FAST_IF(!(sHeight > 0));
         const COORD Cursor = csbiex.dwCursorPosition;
 
         // Rectangle to cut out of the existing buffer
+        // It will be clipped to the buffer boundaries so SHORT_MAX gives us the full buffer width.
         SMALL_RECT srScroll = Screen;
+        srScroll.Left = 0;
+        srScroll.Right = SHORT_MAX;
         // Paste coordinate for cut text above
         COORD coordDestination;
         coordDestination.X = 0;
         coordDestination.Y = 0;
 
-        // Fill character for remaining space left behind by "cut" operation (or for fill if we "cut" the entire line)
-        CHAR_INFO ciFill;
-        ciFill.Attributes = csbiex.wAttributes;
-        ciFill.Char.UnicodeChar = static_cast<WCHAR>(0x20); // space character. use 0x20 instead of literal space because we can't assume the compiler will always turn ' ' into 0x20.
-        fSuccess = !!_conApi->ScrollConsoleScreenBufferW(&srScroll, nullptr, coordDestination, &ciFill);
+        // Typically a scroll operation should fill with standard erase attributes, but in
+        // this case we need to use the default attributes, hence standardFillAttrs is false.
+        fSuccess = !!_conApi->PrivateScrollRegion(srScroll, std::nullopt, coordDestination, false);
         if (fSuccess)
         {
-            // Clear everything after the viewport. This is two regions:
-            // A. below the viewport
-            // B. to the right of the viewport.
-
-            // First clear section A
+            // Clear everything after the viewport.
             const DWORD dwTotalAreaBelow = csbiex.dwSize.X * (csbiex.dwSize.Y - sHeight);
             const COORD coordBelowStartPosition = { 0, sHeight };
-            // We don't use the _EraseAreaHelper here because _EraseSingleLineDistanceHelper does it all in one operation
-            fSuccess = _EraseSingleLineDistanceHelper(coordBelowStartPosition, dwTotalAreaBelow, csbiex.wAttributes);
+            // Again we need to use the default attributes, hence standardFillAttrs is false.
+            fSuccess = _conApi->PrivateFillRegion(coordBelowStartPosition, dwTotalAreaBelow, L' ', false);
 
             if (fSuccess)
             {
-                // If there is a section B, clear it.
-                const COORD coordBottomRight = { csbiex.dwSize.X, coordBelowStartPosition.Y };
-                const COORD coordRightStartPosition = { sWidth, 0 };
-                if (coordBottomRight.X > coordRightStartPosition.X)
-                {
-                    // We use the Area helper here because the Line helper would
-                    //      erase the parts of the screen we want to keep too
-                    fSuccess = _EraseAreaHelper(coordRightStartPosition, coordBottomRight, csbiex.wAttributes);
-                }
+                // Move the viewport (CAN'T be done in one call with SetConsoleScreenBufferInfoEx, because legacy)
+                SMALL_RECT srNewViewport;
+                srNewViewport.Left = Screen.Left;
+                srNewViewport.Top = 0;
+                // SetConsoleWindowInfo uses an inclusive rect, while GetConsoleScreenBufferInfo is exclusive
+                srNewViewport.Right = Screen.Right - 1;
+                srNewViewport.Bottom = sHeight - 1;
+                fSuccess = !!_conApi->SetConsoleWindowInfo(true, &srNewViewport);
 
                 if (fSuccess)
                 {
-                    // Move the viewport (CAN'T be done in one call with SetConsoleScreenBufferInfoEx, because legacy)
-                    SMALL_RECT srNewViewport;
-                    srNewViewport.Left = 0;
-                    srNewViewport.Top = 0;
-                    // SetConsoleWindowInfo uses an inclusive rect, while GetConsoleScreenBufferInfo is exclusive
-                    srNewViewport.Right = sWidth - 1;
-                    srNewViewport.Bottom = sHeight - 1;
-                    fSuccess = !!_conApi->SetConsoleWindowInfo(true, &srNewViewport);
-
-                    if (fSuccess)
-                    {
-                        // Move the cursor to the same relative location.
-                        const COORD newCursor = { Cursor.X - Screen.Left, Cursor.Y - Screen.Top };
-                        fSuccess = !!_conApi->SetConsoleCursorPosition(newCursor);
-                    }
+                    // Move the cursor to the same relative location.
+                    const COORD newCursor = { Cursor.X, Cursor.Y - Screen.Top };
+                    fSuccess = !!_conApi->SetConsoleCursorPosition(newCursor);
                 }
             }
         }

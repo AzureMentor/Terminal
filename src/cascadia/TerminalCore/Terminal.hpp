@@ -11,7 +11,6 @@
 #include "../../terminal/input/terminalInput.hpp"
 
 #include "../../types/inc/Viewport.hpp"
-#include "../../types/inc/GlyphWidth.hpp"
 #include "../../types/IUiaData.h"
 #include "../../cascadia/terminalcore/ITerminalApi.hpp"
 #include "../../cascadia/terminalcore/ITerminalInput.hpp"
@@ -93,6 +92,8 @@ public:
     [[nodiscard]] HRESULT UserResize(const COORD viewportSize) noexcept override;
     void UserScrollViewport(const int viewTop) override;
     int GetScrollOffset() override;
+
+    void TrySnapOnInput() override;
 #pragma endregion
 
 #pragma region IBaseData(base to IRenderData and IUiaData)
@@ -126,7 +127,9 @@ public:
     const bool IsSelectionActive() const noexcept;
     void ClearSelection() override;
     void SelectNewRegion(const COORD coordStart, const COORD coordEnd) override;
+    const COORD GetSelectionAnchor() const override;
     const std::wstring GetConsoleTitle() const noexcept override;
+    void ColorSelection(const COORD coordSelectionStart, const COORD coordSelectionEnd, const TextAttribute) override;
 #pragma endregion
 
     void SetWriteInputCallback(std::function<void(std::wstring&)> pfn) noexcept;
@@ -159,12 +162,14 @@ private:
     std::unique_ptr<::Microsoft::Console::VirtualTerminal::TerminalInput> _terminalInput;
 
     std::wstring _title;
+    std::wstring _startingTitle;
 
     std::array<COLORREF, XTERM_COLOR_TABLE_SIZE> _colorTable;
     COLORREF _defaultFg;
     COLORREF _defaultBg;
 
     bool _snapOnInput;
+    bool _suppressApplicationTitle;
 
 #pragma region Text Selection
     enum class SelectionExpansionMode
@@ -172,12 +177,6 @@ private:
         Cell,
         Word,
         Line
-    };
-    enum class DelimiterClass
-    {
-        ControlChar,
-        DelimiterChar,
-        RegularChar
     };
     COORD _selectionAnchor;
     COORD _endSelectionPosition;
@@ -236,7 +235,6 @@ private:
     SHORT _ExpandWideGlyphSelectionRight(const SHORT xPos, const SHORT yPos) const;
     COORD _ExpandDoubleClickSelectionLeft(const COORD position) const;
     COORD _ExpandDoubleClickSelectionRight(const COORD position) const;
-    DelimiterClass _GetDelimiterClass(const std::wstring_view cellChar) const noexcept;
     COORD _ConvertToBufferCell(const COORD viewportPos) const;
     const bool _IsSingleCellSelection() const noexcept;
     std::tuple<COORD, COORD> _PreprocessSelectionCoords() const;

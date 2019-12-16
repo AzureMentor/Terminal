@@ -29,6 +29,8 @@ using Microsoft::Console::VirtualTerminal::StateMachine;
 // Used by WriteCharsLegacy.
 #define IS_GLYPH_CHAR(wch) (((wch) < L' ') || ((wch) == 0x007F))
 
+constexpr unsigned int LOCAL_BUFFER_SIZE = 100;
+
 // Routine Description:
 // - This routine updates the cursor position.  Its input is the non-special
 //   cased new location of the cursor.  For example, if the cursor were being
@@ -72,7 +74,10 @@ using Microsoft::Console::VirtualTerminal::StateMachine;
         }
     }
 
-    const auto bufferAttributes = screenInfo.GetAttributes();
+    // The VT standard requires the lines revealed when scrolling are filled
+    // with the current background color, but with no meta attributes set.
+    auto fillAttributes = screenInfo.GetAttributes();
+    fillAttributes.SetStandardErase();
 
     const auto relativeMargins = screenInfo.GetRelativeScrollMargins();
     auto viewport = screenInfo.GetViewport();
@@ -142,7 +147,7 @@ using Microsoft::Console::VirtualTerminal::StateMachine;
 
         try
         {
-            ScrollRegion(screenInfo, scrollRect, std::nullopt, newPostMarginsOrigin, UNICODE_SPACE, bufferAttributes);
+            ScrollRegion(screenInfo, scrollRect, std::nullopt, newPostMarginsOrigin, UNICODE_SPACE, fillAttributes);
         }
         CATCH_LOG();
 
@@ -191,11 +196,20 @@ using Microsoft::Console::VirtualTerminal::StateMachine;
 
         try
         {
-            ScrollRegion(screenInfo, scrollRect, scrollRect, dest, UNICODE_SPACE, bufferAttributes);
+            ScrollRegion(screenInfo, scrollRect, scrollRect, dest, UNICODE_SPACE, fillAttributes);
         }
         CATCH_LOG();
 
         coordCursor.Y -= diff;
+    }
+
+    // If the margins are set, then it shouldn't be possible for the cursor to
+    //   move below the bottom of the viewport. Either it should be constrained
+    //   inside the margins by one of the scrollDown cases handled above, or
+    //   we'll need to clamp it inside the viewport here.
+    if (fMarginsSet && coordCursor.Y > viewport.BottomInclusive())
+    {
+        coordCursor.Y = viewport.BottomInclusive();
     }
 
     NTSTATUS Status = STATUS_SUCCESS;
@@ -744,7 +758,6 @@ using Microsoft::Console::VirtualTerminal::StateMachine;
             if (screenInfo.InVTMode())
             {
                 const COORD cCursorOld = cursor.GetPosition();
-                // Get Forward tab handles tabbing past the end of the buffer
                 CursorPosition = screenInfo.GetForwardTab(cCursorOld);
             }
             else

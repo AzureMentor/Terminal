@@ -26,12 +26,6 @@ namespace winrt
 
 namespace winrt::TerminalApp::implementation
 {
-    void TerminalPage::_HandleNewTab(const IInspectable& /*sender*/,
-                                     const TerminalApp::ActionEventArgs& args)
-    {
-        _OpenNewTab(std::nullopt);
-        args.Handled(true);
-    }
     void TerminalPage::_HandleOpenNewTabDropdown(const IInspectable& /*sender*/,
                                                  const TerminalApp::ActionEventArgs& args)
     {
@@ -95,18 +89,18 @@ namespace winrt::TerminalApp::implementation
         args.Handled(true);
     }
 
-    void TerminalPage::_HandleSplitVertical(const IInspectable& /*sender*/,
-                                            const TerminalApp::ActionEventArgs& args)
+    void TerminalPage::_HandleSplitPane(const IInspectable& /*sender*/,
+                                        const TerminalApp::ActionEventArgs& args)
     {
-        _SplitVertical(std::nullopt);
-        args.Handled(true);
-    }
-
-    void TerminalPage::_HandleSplitHorizontal(const IInspectable& /*sender*/,
-                                              const TerminalApp::ActionEventArgs& args)
-    {
-        _SplitHorizontal(std::nullopt);
-        args.Handled(true);
+        if (args == nullptr)
+        {
+            args.Handled(false);
+        }
+        else if (const auto& realArgs = args.ActionArgs().try_as<TerminalApp::SplitPaneArgs>())
+        {
+            _SplitPane(realArgs.SplitStyle(), realArgs.TerminalArgs());
+            args.Handled(true);
+        }
     }
 
     void TerminalPage::_HandleScrollUpPage(const IInspectable& /*sender*/,
@@ -138,12 +132,17 @@ namespace winrt::TerminalApp::implementation
         args.Handled(true);
     }
 
-    void TerminalPage::_HandleNewTabWithProfile(const IInspectable& /*sender*/,
-                                                const TerminalApp::ActionEventArgs& args)
+    void TerminalPage::_HandleNewTab(const IInspectable& /*sender*/,
+                                     const TerminalApp::ActionEventArgs& args)
     {
-        if (const auto& realArgs = args.ActionArgs().try_as<TerminalApp::NewTabWithProfileArgs>())
+        if (args == nullptr)
         {
-            _OpenNewTab({ realArgs.ProfileIndex() });
+            _OpenNewTab(nullptr);
+            args.Handled(true);
+        }
+        else if (const auto& realArgs = args.ActionArgs().try_as<TerminalApp::NewTabArgs>())
+        {
+            _OpenNewTab(realArgs.TerminalArgs());
             args.Handled(true);
         }
     }
@@ -163,8 +162,16 @@ namespace winrt::TerminalApp::implementation
     {
         if (const auto& realArgs = args.ActionArgs().try_as<TerminalApp::ResizePaneArgs>())
         {
-            _ResizePane(realArgs.Direction());
-            args.Handled(true);
+            if (realArgs.Direction() == TerminalApp::Direction::None)
+            {
+                // Do nothing
+                args.Handled(false);
+            }
+            else
+            {
+                _ResizePane(realArgs.Direction());
+                args.Handled(true);
+            }
         }
     }
 
@@ -173,8 +180,16 @@ namespace winrt::TerminalApp::implementation
     {
         if (const auto& realArgs = args.ActionArgs().try_as<TerminalApp::MoveFocusArgs>())
         {
-            _MoveFocus(realArgs.Direction());
-            args.Handled(true);
+            if (realArgs.Direction() == TerminalApp::Direction::None)
+            {
+                // Do nothing
+                args.Handled(false);
+            }
+            else
+            {
+                _MoveFocus(realArgs.Direction());
+                args.Handled(true);
+            }
         }
     }
 
@@ -193,9 +208,25 @@ namespace winrt::TerminalApp::implementation
     {
         if (const auto& realArgs = args.ActionArgs().try_as<TerminalApp::AdjustFontSizeArgs>())
         {
-            const auto termControl = _GetFocusedControl();
+            const auto termControl = _GetActiveControl();
             termControl.AdjustFontSize(realArgs.Delta());
             args.Handled(true);
         }
     }
+
+    void TerminalPage::_HandleResetFontSize(const IInspectable& /*sender*/,
+                                            const TerminalApp::ActionEventArgs& args)
+    {
+        const auto termControl = _GetActiveControl();
+        termControl.ResetFontSize();
+        args.Handled(true);
+    }
+
+    void TerminalPage::_HandleToggleFullscreen(const IInspectable& /*sender*/,
+                                               const TerminalApp::ActionEventArgs& args)
+    {
+        _ToggleFullscreen();
+        args.Handled(true);
+    }
+
 }

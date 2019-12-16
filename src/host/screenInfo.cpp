@@ -42,7 +42,6 @@ SCREEN_INFORMATION::SCREEN_INFORMATION(
     Next{ nullptr },
     WriteConsoleDbcsLeadByte{ 0, 0 },
     FillOutDbcsLeadChar{ 0 },
-    // LineChar initialized below.
     ConvScreenInfo{ nullptr },
     ScrollScale{ 1ul },
     _pConsoleWindowMetrics{ pMetrics },
@@ -62,13 +61,6 @@ SCREEN_INFORMATION::SCREEN_INFORMATION(
     _currentFont{ fontInfo },
     _desiredFont{ fontInfo }
 {
-    LineChar[0] = UNICODE_BOX_DRAW_LIGHT_DOWN_AND_RIGHT;
-    LineChar[1] = UNICODE_BOX_DRAW_LIGHT_DOWN_AND_LEFT;
-    LineChar[2] = UNICODE_BOX_DRAW_LIGHT_HORIZONTAL;
-    LineChar[3] = UNICODE_BOX_DRAW_LIGHT_VERTICAL;
-    LineChar[4] = UNICODE_BOX_DRAW_LIGHT_UP_AND_RIGHT;
-    LineChar[5] = UNICODE_BOX_DRAW_LIGHT_UP_AND_LEFT;
-
     // Check if VT mode is enabled. Note that this can be true w/o calling
     // SetConsoleMode, if VirtualTerminalLevel is set to !=0 in the registry.
     const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
@@ -2035,12 +2027,17 @@ const SCREEN_INFORMATION& SCREEN_INFORMATION::GetMainBuffer() const
 
     const FontInfo& existingFont = GetCurrentFont();
 
+    // The buffer needs to be initialized with the standard erase attributes,
+    // i.e. the current background color, but with no meta attributes set.
+    auto initAttributes = GetAttributes();
+    initAttributes.SetStandardErase();
+
     NTSTATUS Status = SCREEN_INFORMATION::CreateInstance(WindowSize,
                                                          existingFont,
                                                          WindowSize,
-                                                         GetAttributes(),
+                                                         initAttributes,
                                                          *GetPopupAttributes(),
-                                                         CURSOR_SMALL_SIZE,
+                                                         Cursor::CURSOR_SMALL_SIZE,
                                                          ppsiNewScreenBuffer);
     if (NT_SUCCESS(Status))
     {
@@ -2219,12 +2216,7 @@ COORD SCREEN_INFORMATION::GetForwardTab(const COORD cCurrCursorPos) const noexce
 {
     COORD cNewCursorPos = cCurrCursorPos;
     SHORT sWidth = GetBufferSize().RightInclusive();
-    if (cCurrCursorPos.X == sWidth)
-    {
-        cNewCursorPos.X = 0;
-        cNewCursorPos.Y += 1;
-    }
-    else if (_tabStops.empty() || cCurrCursorPos.X >= _tabStops.back())
+    if (_tabStops.empty() || cCurrCursorPos.X >= _tabStops.back())
     {
         cNewCursorPos.X = sWidth;
     }
@@ -2235,7 +2227,8 @@ COORD SCREEN_INFORMATION::GetForwardTab(const COORD cCurrCursorPos) const noexce
         {
             if (*it > cCurrCursorPos.X)
             {
-                cNewCursorPos.X = *it;
+                // make sure we don't exceed the width of the buffer
+                cNewCursorPos.X = std::min(*it, sWidth);
                 break;
             }
         }
@@ -2501,9 +2494,14 @@ void SCREEN_INFORMATION::SetViewport(const Viewport& newViewport,
     _viewport.ConvertFromOrigin(&relativeCursor);
     RETURN_IF_FAILED(SetCursorPosition(relativeCursor, false));
 
-    // Update all the rows in the current viewport with the currently active attributes.
-    OutputCellIterator it(GetAttributes());
-    WriteRect(it, _viewport);
+    // Update all the rows in the current viewport with the standard erase attributes,
+    // i.e. the current background color, but with no meta attributes set.
+    auto fillAttributes = GetAttributes();
+    fillAttributes.SetStandardErase();
+    auto fillPosition = COORD{ 0, _viewport.Top() };
+    auto fillLength = gsl::narrow_cast<size_t>(_viewport.Height() * GetBufferSize().Width());
+    auto fillData = OutputCellIterator{ fillAttributes, fillLength };
+    Write(fillData, fillPosition, false);
 
     return S_OK;
 }
@@ -2801,7 +2799,7 @@ void SCREEN_INFORMATION::UpdateBottom()
 }
 
 // Method Description:
-// - Initialize the row with the cursor on it to the current text attributes.
+// - Initialize the row with the cursor on it to the standard erase attributes.
 //      This is executed when we move the cursor below the current viewport in
 //      VT mode. When that happens in a real terminal, the line is brand new,
 //      so it gets initialized for the first time with the current attributes.
@@ -2818,7 +2816,11 @@ void SCREEN_INFORMATION::InitializeCursorRowAttributes()
     {
         const auto& cursor = _textBuffer->GetCursor();
         ROW& row = _textBuffer->GetRowByOffset(cursor.GetPosition().Y);
-        row.GetAttrRow().SetAttrToEnd(0, GetAttributes());
+        // The VT standard requires that the new row is initialized with
+        // the current background color, but with no meta attributes set.
+        auto fillAttributes = GetAttributes();
+        fillAttributes.SetStandardErase();
+        row.GetAttrRow().SetAttrToEnd(0, fillAttributes);
     }
 }
 

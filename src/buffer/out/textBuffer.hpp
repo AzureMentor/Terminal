@@ -101,7 +101,7 @@ public:
     bool NewlineCursor();
 
     // Scroll needs access to this to quickly rotate around the buffer.
-    bool IncrementCircularBuffer();
+    bool IncrementCircularBuffer(const bool inVtMode = false);
 
     COORD GetLastNonSpaceCharacter() const;
     COORD GetLastNonSpaceCharacter(const Microsoft::Console::Types::Viewport viewport) const;
@@ -130,6 +130,9 @@ public:
 
     Microsoft::Console::Render::IRenderTarget& GetRenderTarget() noexcept;
 
+    const COORD GetWordStart(const COORD target, const std::wstring_view wordDelimiters, bool includeCharacterRun = false) const;
+    const COORD GetWordEnd(const COORD target, const std::wstring_view wordDelimiters, bool includeDelimiterRun = false) const;
+
     class TextAndColor
     {
     public:
@@ -149,6 +152,11 @@ public:
                                const std::wstring_view fontFaceName,
                                const COLORREF backgroundColor,
                                const std::string& htmlTitle);
+
+    static std::string GenRTF(const TextAndColor& rows,
+                              const int fontHeightPoints,
+                              const std::wstring_view fontFaceName,
+                              const COLORREF backgroundColor);
 
 private:
     std::deque<ROW> _storage;
@@ -180,6 +188,14 @@ private:
 
     ROW& _GetFirstRow();
     ROW& _GetPrevRowNoWrap(const ROW& row);
+
+    enum class DelimiterClass
+    {
+        ControlChar,
+        DelimiterChar,
+        RegularChar
+    };
+    DelimiterClass _GetDelimiterClass(const std::wstring_view cellChar, const std::wstring_view wordDelimiters) const noexcept;
 
 #ifdef UNIT_TESTING
     friend class TextBufferTests;

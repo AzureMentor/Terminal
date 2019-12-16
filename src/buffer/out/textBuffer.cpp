@@ -539,17 +539,24 @@ bool TextBuffer::NewlineCursor()
 //Routine Description:
 // - Increments the circular buffer by one. Circular buffer is represented by FirstRow variable.
 //Arguments:
-// - <none>
+// - inVtMode - set to true in VT mode, so standard erase attributes are used for the new row.
 //Return Value:
 // - true if we successfully incremented the buffer.
-bool TextBuffer::IncrementCircularBuffer()
+bool TextBuffer::IncrementCircularBuffer(const bool inVtMode)
 {
     // FirstRow is at any given point in time the array index in the circular buffer that corresponds
     // to the logical position 0 in the window (cursor coordinates and all other coordinates).
     _renderTarget.TriggerCircling();
 
     // First, clean out the old "first row" as it will become the "last row" of the buffer after the circle is performed.
-    const bool fSuccess = _storage.at(_firstRow).Reset(_currentAttributes);
+    auto fillAttributes = _currentAttributes;
+    if (inVtMode)
+    {
+        // The VT standard requires that the new row is initialized with
+        // the current background color, but with no meta attributes set.
+        fillAttributes.SetStandardErase();
+    }
+    const bool fSuccess = _storage.at(_firstRow).Reset(fillAttributes);
     if (fSuccess)
     {
         // Now proceed to increment.
@@ -944,6 +951,118 @@ Microsoft::Console::Render::IRenderTarget& TextBuffer::GetRenderTarget() noexcep
     return _renderTarget;
 }
 
+// Method Description:
+// - Get the COORD for the beginning of the word you are on
+// Arguments:
+// - target - a COORD on the word you are currently on
+// - wordDelimiters - what characters are we considering for the separation of words
+// - includeCharacterRun - include the character run located at the beginning of the word
+// Return Value:
+// - The COORD for the first character on the "word"  (inclusive)
+const COORD TextBuffer::GetWordStart(const COORD target, const std::wstring_view wordDelimiters, bool includeCharacterRun) const
+{
+    const auto bufferSize = GetSize();
+    COORD result = target;
+
+    // can't expand left
+    if (target.X == bufferSize.Left())
+    {
+        return result;
+    }
+
+    auto bufferIterator = GetTextDataAt(result);
+    const auto initialDelimiter = _GetDelimiterClass(*bufferIterator, wordDelimiters);
+    while (result.X > bufferSize.Left() && (_GetDelimiterClass(*bufferIterator, wordDelimiters) == initialDelimiter))
+    {
+        bufferSize.DecrementInBounds(result);
+        --bufferIterator;
+    }
+
+    if (includeCharacterRun)
+    {
+        // include character run for readable word
+        if (_GetDelimiterClass(*bufferIterator, wordDelimiters) == DelimiterClass::RegularChar)
+        {
+            result = GetWordStart(result, wordDelimiters);
+        }
+    }
+    else if (_GetDelimiterClass(*bufferIterator, wordDelimiters) != initialDelimiter)
+    {
+        // move off of delimiter
+        bufferSize.IncrementInBounds(result);
+    }
+
+    return result;
+}
+
+// Method Description:
+// - Get the COORD for the end of the word you are on
+// Arguments:
+// - target - a COORD on the word you are currently on
+// - wordDelimiters - what characters are we considering for the separation of words
+// - includeDelimiterRun - include the delimiter runs located at the end of the word
+// Return Value:
+// - The COORD for the last character on the "word" (inclusive)
+const COORD TextBuffer::GetWordEnd(const COORD target, const std::wstring_view wordDelimiters, bool includeDelimiterRun) const
+{
+    const auto bufferSize = GetSize();
+    COORD result = target;
+
+    // can't expand right
+    if (target.X == bufferSize.RightInclusive())
+    {
+        return result;
+    }
+
+    auto bufferIterator = GetTextDataAt(result);
+    const auto initialDelimiter = _GetDelimiterClass(*bufferIterator, wordDelimiters);
+    while (result.X < bufferSize.RightInclusive() && (_GetDelimiterClass(*bufferIterator, wordDelimiters) == initialDelimiter))
+    {
+        bufferSize.IncrementInBounds(result);
+        ++bufferIterator;
+    }
+
+    if (includeDelimiterRun)
+    {
+        // include delimiter run after word
+        if (_GetDelimiterClass(*bufferIterator, wordDelimiters) != DelimiterClass::RegularChar)
+        {
+            result = GetWordEnd(result, wordDelimiters);
+        }
+    }
+    else if (_GetDelimiterClass(*bufferIterator, wordDelimiters) != initialDelimiter)
+    {
+        // move off of delimiter
+        bufferSize.DecrementInBounds(result);
+    }
+
+    return result;
+}
+
+// Method Description:
+// - get delimiter class for buffer cell data
+// - used for double click selection and uia word navigation
+// Arguments:
+// - cellChar: the char saved to the buffer cell under observation
+// - wordDelimiters: the delimiters defined as a part of the DelimiterClass::DelimiterChar
+// Return Value:
+// - the delimiter class for the given char
+TextBuffer::DelimiterClass TextBuffer::_GetDelimiterClass(const std::wstring_view cellChar, const std::wstring_view wordDelimiters) const noexcept
+{
+    if (cellChar.at(0) <= UNICODE_SPACE)
+    {
+        return DelimiterClass::ControlChar;
+    }
+    else if (wordDelimiters.find(cellChar) != std::wstring_view::npos)
+    {
+        return DelimiterClass::DelimiterChar;
+    }
+    else
+    {
+        return DelimiterClass::RegularChar;
+    }
+}
+
 // Routine Description:
 // - Retrieves the text data from the selected region and presents it in a clipboard-ready format (given little post-processing).
 // Arguments:
@@ -1145,7 +1264,7 @@ std::string TextBuffer::GenHTML(const TextAndColor& rows, const int fontHeightPo
                 }
 
                 const auto writeAccumulatedChars = [&](bool includeCurrent) {
-                    if (col > startOffset)
+                    if (col >= startOffset)
                     {
                         const auto unescapedText = ConvertToA(CP_UTF8, std::wstring_view(rows.text.at(row)).substr(startOffset, col - startOffset + includeCurrent));
                         for (const auto c : unescapedText)
@@ -1233,6 +1352,188 @@ std::string TextBuffer::GenHTML(const TextAndColor& rows, const int fontHeightPo
         clipHeaderBuilder << "EndSelection:" << std::setw(10) << fragEndPos << "\r\n";
 
         return clipHeaderBuilder.str() + htmlBuilder.str();
+    }
+    catch (...)
+    {
+        LOG_HR(wil::ResultFromCaughtException());
+        return {};
+    }
+}
+
+// Routine Description:
+// - Generates an RTF document based on the passed in text and color data
+//   RTF 1.5 Spec: https://www.biblioscape.com/rtf15_spec.htm
+// Arguments:
+// - rows - the text and color data we will format & encapsulate
+// - backgroundColor - default background color for characters, also used in padding
+// - fontHeightPoints - the unscaled font height
+// - fontFaceName - the name of the font used
+// - htmlTitle - value used in title tag of html header. Used to name the application
+// Return Value:
+// - string containing the generated RTF
+std::string TextBuffer::GenRTF(const TextAndColor& rows, const int fontHeightPoints, const std::wstring_view fontFaceName, const COLORREF backgroundColor)
+{
+    try
+    {
+        std::ostringstream rtfBuilder;
+
+        // start rtf
+        rtfBuilder << "{";
+
+        // Standard RTF header.
+        // This is similar to the header gnerated by WordPad.
+        // \ansi - specifies that the ANSI char set is used in the current doc
+        // \ansicpg1252 - represents the ANSI code page which is used to perform the Unicode to ANSI conversion when writing RTF text
+        // \deff0 - specifes that the default font for the document is the one at index 0 in the font table
+        // \nouicompat - ?
+        rtfBuilder << "\\rtf1\\ansi\\ansicpg1252\\deff0\\nouicompat";
+
+        // font table
+        rtfBuilder << "{\\fonttbl{\\f0\\fmodern\\fcharset0 " << ConvertToA(CP_UTF8, fontFaceName) << ";}}";
+
+        // map to keep track of colors:
+        // keys are colors represented by COLORREF
+        // values are indices of the corresponding colors in the color table
+        std::unordered_map<COLORREF, int> colorMap;
+        int nextColorIndex = 1; // leave 0 for the default color and start from 1.
+
+        // RTF color table
+        std::ostringstream colorTableBuilder;
+        colorTableBuilder << "{\\colortbl ;";
+        colorTableBuilder << "\\red" << static_cast<int>(GetRValue(backgroundColor))
+                          << "\\green" << static_cast<int>(GetGValue(backgroundColor))
+                          << "\\blue" << static_cast<int>(GetBValue(backgroundColor))
+                          << ";";
+        colorMap[backgroundColor] = nextColorIndex++;
+
+        // content
+        std::ostringstream contentBuilder;
+        contentBuilder << "\\viewkind4\\uc4";
+
+        // paragraph styles
+        // \fs specificies font size in half-points i.e. \fs20 results in a font size
+        // of 10 pts. That's why, font size is multiplied by 2 here.
+        contentBuilder << "\\pard\\slmult1\\f0\\fs" << std::to_string(2 * fontHeightPoints)
+                       << "\\highlight1"
+                       << " ";
+
+        std::optional<COLORREF> fgColor = std::nullopt;
+        std::optional<COLORREF> bkColor = std::nullopt;
+        for (size_t row = 0; row < rows.text.size(); ++row)
+        {
+            size_t startOffset = 0;
+
+            if (row != 0)
+            {
+                contentBuilder << "\\line "; // new line
+            }
+
+            for (size_t col = 0; col < rows.text.at(row).length(); ++col)
+            {
+                const bool isLastCharInRow =
+                    col == rows.text.at(row).length() - 1 ||
+                    rows.text.at(row).at(col + 1) == '\r' ||
+                    rows.text.at(row).at(col + 1) == '\n';
+
+                bool colorChanged = false;
+                if (!fgColor.has_value() || rows.FgAttr.at(row).at(col) != fgColor.value())
+                {
+                    fgColor = rows.FgAttr.at(row).at(col);
+                    colorChanged = true;
+                }
+
+                if (!bkColor.has_value() || rows.BkAttr.at(row).at(col) != bkColor.value())
+                {
+                    bkColor = rows.BkAttr.at(row).at(col);
+                    colorChanged = true;
+                }
+
+                const auto writeAccumulatedChars = [&](bool includeCurrent) {
+                    if (col >= startOffset)
+                    {
+                        const auto unescapedText = ConvertToA(CP_UTF8, std::wstring_view(rows.text.at(row)).substr(startOffset, col - startOffset + includeCurrent));
+                        for (const auto c : unescapedText)
+                        {
+                            switch (c)
+                            {
+                            case '\\':
+                            case '{':
+                            case '}':
+                                contentBuilder << "\\" << c;
+                                break;
+                            default:
+                                contentBuilder << c;
+                            }
+                        }
+
+                        startOffset = col;
+                    }
+                };
+
+                if (colorChanged)
+                {
+                    writeAccumulatedChars(false);
+
+                    int bkColorIndex = 0;
+                    if (colorMap.find(bkColor.value()) != colorMap.end())
+                    {
+                        // color already exists in the map, just retrieve the index
+                        bkColorIndex = colorMap[bkColor.value()];
+                    }
+                    else
+                    {
+                        // color not present in the map, so add it
+                        colorTableBuilder << "\\red" << static_cast<int>(GetRValue(bkColor.value()))
+                                          << "\\green" << static_cast<int>(GetGValue(bkColor.value()))
+                                          << "\\blue" << static_cast<int>(GetBValue(bkColor.value()))
+                                          << ";";
+                        colorMap[bkColor.value()] = nextColorIndex;
+                        bkColorIndex = nextColorIndex++;
+                    }
+
+                    int fgColorIndex = 0;
+                    if (colorMap.find(fgColor.value()) != colorMap.end())
+                    {
+                        // color already exists in the map, just retrieve the index
+                        fgColorIndex = colorMap[fgColor.value()];
+                    }
+                    else
+                    {
+                        // color not present in the map, so add it
+                        colorTableBuilder << "\\red" << static_cast<int>(GetRValue(fgColor.value()))
+                                          << "\\green" << static_cast<int>(GetGValue(fgColor.value()))
+                                          << "\\blue" << static_cast<int>(GetBValue(fgColor.value()))
+                                          << ";";
+                        colorMap[fgColor.value()] = nextColorIndex;
+                        fgColorIndex = nextColorIndex++;
+                    }
+
+                    contentBuilder << "\\highglight" << bkColorIndex
+                                   << "\\cf" << fgColorIndex
+                                   << " ";
+                }
+
+                if (isLastCharInRow)
+                {
+                    writeAccumulatedChars(true);
+                    break;
+                }
+            }
+        }
+
+        // end colortbl
+        colorTableBuilder << "}";
+
+        // add color table to the final RTF
+        rtfBuilder << colorTableBuilder.str();
+
+        // add the text content to the final RTF
+        rtfBuilder << contentBuilder.str();
+
+        // end rtf
+        rtfBuilder << "}";
+
+        return rtfBuilder.str();
     }
     catch (...)
     {

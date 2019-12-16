@@ -42,9 +42,9 @@ steps:
     vsVersion: 16.0
     platform: '$(BuildPlatform)'
     configuration: '$(BuildConfiguration)'
-    msbuildArgs: ${{ parameters.additionalBuildArguments }}
+    msbuildArgs: "${{ parameters.additionalBuildArguments }}"
     clean: true
-    maximumCpuCount: false
+    maximumCpuCount: true
 
 - task: PowerShell@2
   displayName: 'Check MSIX for common regressions'
