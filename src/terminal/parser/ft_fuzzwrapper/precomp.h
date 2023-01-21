@@ -14,10 +14,12 @@ Abstract:
 #define _CRT_SECURE_NO_WARNINGS 1
 #endif
 
+#define NOMINMAX
+
 #include <windows.h>
 
-#include <stdlib.h>
-#include <stdio.h>
+#include <cstdlib>
+#include <cstdio>
 
 // This includes support libraries from the CRT, STL, WIL, and GSL
 #include "LibraryIncludes.h"

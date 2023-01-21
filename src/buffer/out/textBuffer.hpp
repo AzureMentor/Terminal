@@ -49,51 +49,56 @@ filling in the last row, and updating the screen.
 
 #pragma once
 
+#include <vector>
+
 #include "cursor.h"
 #include "Row.hpp"
 #include "TextAttribute.hpp"
-#include "UnicodeStorage.hpp"
 #include "../types/inc/Viewport.hpp"
 
 #include "../buffer/out/textBufferCellIterator.hpp"
 #include "../buffer/out/textBufferTextIterator.hpp"
 
-#include "../renderer/inc/IRenderTarget.hpp"
+namespace Microsoft::Console::Render
+{
+    class Renderer;
+}
 
 class TextBuffer final
 {
 public:
-    TextBuffer(const COORD screenBufferSize,
+    TextBuffer(const til::size screenBufferSize,
                const TextAttribute defaultAttributes,
                const UINT cursorSize,
-               Microsoft::Console::Render::IRenderTarget& renderTarget);
+               const bool isActiveBuffer,
+               Microsoft::Console::Render::Renderer& renderer);
     TextBuffer(const TextBuffer& a) = delete;
 
     // Used for duplicating properties to another text buffer
     void CopyProperties(const TextBuffer& OtherBuffer) noexcept;
 
     // row manipulation
-    const ROW& GetRowByOffset(const size_t index) const;
-    ROW& GetRowByOffset(const size_t index);
+    const ROW& GetRowByOffset(const til::CoordType index) const noexcept;
+    ROW& GetRowByOffset(const til::CoordType index) noexcept;
 
-    TextBufferCellIterator GetCellDataAt(const COORD at) const;
-    TextBufferCellIterator GetCellLineDataAt(const COORD at) const;
-    TextBufferCellIterator GetCellDataAt(const COORD at, const Microsoft::Console::Types::Viewport limit) const;
-    TextBufferTextIterator GetTextDataAt(const COORD at) const;
-    TextBufferTextIterator GetTextLineDataAt(const COORD at) const;
-    TextBufferTextIterator GetTextDataAt(const COORD at, const Microsoft::Console::Types::Viewport limit) const;
+    TextBufferCellIterator GetCellDataAt(const til::point at) const;
+    TextBufferCellIterator GetCellLineDataAt(const til::point at) const;
+    TextBufferCellIterator GetCellDataAt(const til::point at, const Microsoft::Console::Types::Viewport limit) const;
+    TextBufferTextIterator GetTextDataAt(const til::point at) const;
+    TextBufferTextIterator GetTextLineDataAt(const til::point at) const;
+    TextBufferTextIterator GetTextDataAt(const til::point at, const Microsoft::Console::Types::Viewport limit) const;
 
     // Text insertion functions
     OutputCellIterator Write(const OutputCellIterator givenIt);
 
     OutputCellIterator Write(const OutputCellIterator givenIt,
-                             const COORD target,
+                             const til::point target,
                              const std::optional<bool> wrap = true);
 
     OutputCellIterator WriteLine(const OutputCellIterator givenIt,
-                                 const COORD target,
+                                 const til::point target,
                                  const std::optional<bool> setWrap = std::nullopt,
-                                 const std::optional<size_t> limitRight = std::nullopt);
+                                 const std::optional<til::CoordType> limitRight = std::nullopt);
 
     bool InsertCharacter(const wchar_t wch, const DbcsAttribute dbcsAttribute, const TextAttribute attr);
     bool InsertCharacter(const std::wstring_view chars, const DbcsAttribute dbcsAttribute, const TextAttribute attr);
@@ -103,35 +108,68 @@ public:
     // Scroll needs access to this to quickly rotate around the buffer.
     bool IncrementCircularBuffer(const bool inVtMode = false);
 
-    COORD GetLastNonSpaceCharacter() const;
-    COORD GetLastNonSpaceCharacter(const Microsoft::Console::Types::Viewport viewport) const;
+    til::point GetLastNonSpaceCharacter(std::optional<const Microsoft::Console::Types::Viewport> viewOptional = std::nullopt) const;
 
     Cursor& GetCursor() noexcept;
     const Cursor& GetCursor() const noexcept;
 
-    const SHORT GetFirstRowIndex() const noexcept;
+    const til::CoordType GetFirstRowIndex() const noexcept;
 
-    const Microsoft::Console::Types::Viewport GetSize() const;
+    const Microsoft::Console::Types::Viewport GetSize() const noexcept;
 
-    void ScrollRows(const SHORT firstRow, const SHORT size, const SHORT delta);
+    void ScrollRows(const til::CoordType firstRow, const til::CoordType size, const til::CoordType delta);
 
-    UINT TotalRowCount() const noexcept;
+    til::CoordType TotalRowCount() const noexcept;
 
     [[nodiscard]] TextAttribute GetCurrentAttributes() const noexcept;
 
-    void SetCurrentAttributes(const TextAttribute currentAttributes) noexcept;
+    void SetCurrentAttributes(const TextAttribute& currentAttributes) noexcept;
+
+    void SetCurrentLineRendition(const LineRendition lineRendition);
+    void ResetLineRenditionRange(const til::CoordType startRow, const til::CoordType endRow) noexcept;
+    LineRendition GetLineRendition(const til::CoordType row) const noexcept;
+    bool IsDoubleWidthLine(const til::CoordType row) const noexcept;
+
+    til::CoordType GetLineWidth(const til::CoordType row) const noexcept;
+    til::point ClampPositionWithinLine(const til::point position) const noexcept;
+    til::point ScreenToBufferPosition(const til::point position) const noexcept;
+    til::point BufferToScreenPosition(const til::point position) const noexcept;
 
     void Reset();
 
-    [[nodiscard]] HRESULT ResizeTraditional(const COORD newSize);
+    [[nodiscard]] HRESULT ResizeTraditional(const til::size newSize) noexcept;
 
-    const UnicodeStorage& GetUnicodeStorage() const noexcept;
-    UnicodeStorage& GetUnicodeStorage() noexcept;
+    void SetAsActiveBuffer(const bool isActiveBuffer) noexcept;
+    bool IsActiveBuffer() const noexcept;
 
-    Microsoft::Console::Render::IRenderTarget& GetRenderTarget() noexcept;
+    Microsoft::Console::Render::Renderer& GetRenderer() noexcept;
 
-    const COORD GetWordStart(const COORD target, const std::wstring_view wordDelimiters, bool includeCharacterRun = false) const;
-    const COORD GetWordEnd(const COORD target, const std::wstring_view wordDelimiters, bool includeDelimiterRun = false) const;
+    void TriggerRedraw(const Microsoft::Console::Types::Viewport& viewport);
+    void TriggerRedrawCursor(const til::point position);
+    void TriggerRedrawAll();
+    void TriggerScroll();
+    void TriggerScroll(const til::point delta);
+    void TriggerNewTextNotification(const std::wstring_view newText);
+
+    til::point GetWordStart(const til::point target, const std::wstring_view wordDelimiters, bool accessibilityMode = false, std::optional<til::point> limitOptional = std::nullopt) const;
+    til::point GetWordEnd(const til::point target, const std::wstring_view wordDelimiters, bool accessibilityMode = false, std::optional<til::point> limitOptional = std::nullopt) const;
+    bool MoveToNextWord(til::point& pos, const std::wstring_view wordDelimiters, std::optional<til::point> limitOptional = std::nullopt) const;
+    bool MoveToPreviousWord(til::point& pos, const std::wstring_view wordDelimiters) const;
+
+    til::point GetGlyphStart(const til::point pos, std::optional<til::point> limitOptional = std::nullopt) const;
+    til::point GetGlyphEnd(const til::point pos, bool accessibilityMode = false, std::optional<til::point> limitOptional = std::nullopt) const;
+    bool MoveToNextGlyph(til::point& pos, bool allowBottomExclusive = false, std::optional<til::point> limitOptional = std::nullopt) const;
+    bool MoveToPreviousGlyph(til::point& pos, std::optional<til::point> limitOptional = std::nullopt) const;
+
+    const std::vector<til::inclusive_rect> GetTextRects(til::point start, til::point end, bool blockSelection, bool bufferCoordinates) const;
+    std::vector<til::point_span> GetTextSpans(til::point start, til::point end, bool blockSelection, bool bufferCoordinates) const;
+
+    void AddHyperlinkToMap(std::wstring_view uri, uint16_t id);
+    std::wstring GetHyperlinkUriFromId(uint16_t id) const;
+    uint16_t GetHyperlinkId(std::wstring_view uri, std::wstring_view id);
+    void RemoveHyperlinkFromMap(uint16_t id) noexcept;
+    std::wstring GetCustomIdFromId(uint16_t id) const;
+    void CopyHyperlinkMaps(const TextBuffer& OtherBuffer);
 
     class TextAndColor
     {
@@ -141,61 +179,80 @@ public:
         std::vector<std::vector<COLORREF>> BkAttr;
     };
 
-    const TextAndColor GetTextForClipboard(const bool lineSelection,
-                                           const bool trimTrailingWhitespace,
-                                           const std::vector<SMALL_RECT>& selectionRects,
-                                           std::function<COLORREF(TextAttribute&)> GetForegroundColor,
-                                           std::function<COLORREF(TextAttribute&)> GetBackgroundColor) const;
+    size_t SpanLength(const til::point coordStart, const til::point coordEnd) const;
+
+    const TextAndColor GetText(const bool includeCRLF,
+                               const bool trimTrailingWhitespace,
+                               const std::vector<til::inclusive_rect>& textRects,
+                               std::function<std::pair<COLORREF, COLORREF>(const TextAttribute&)> GetAttributeColors = nullptr,
+                               const bool formatWrappedRows = false) const;
+
+    std::wstring GetPlainText(const til::point& start, const til::point& end) const;
 
     static std::string GenHTML(const TextAndColor& rows,
                                const int fontHeightPoints,
                                const std::wstring_view fontFaceName,
-                               const COLORREF backgroundColor,
-                               const std::string& htmlTitle);
+                               const COLORREF backgroundColor);
 
     static std::string GenRTF(const TextAndColor& rows,
                               const int fontHeightPoints,
                               const std::wstring_view fontFaceName,
                               const COLORREF backgroundColor);
 
+    struct PositionInformation
+    {
+        til::CoordType mutableViewportTop{ 0 };
+        til::CoordType visibleViewportTop{ 0 };
+    };
+
+    static HRESULT Reflow(TextBuffer& oldBuffer,
+                          TextBuffer& newBuffer,
+                          const std::optional<Microsoft::Console::Types::Viewport> lastCharacterViewport,
+                          std::optional<std::reference_wrapper<PositionInformation>> positionInfo);
+
+    const size_t AddPatternRecognizer(const std::wstring_view regexString);
+    void ClearPatternRecognizers() noexcept;
+    void CopyPatterns(const TextBuffer& OtherBuffer);
+    interval_tree::IntervalTree<til::point, size_t> GetPatterns(const til::CoordType firstRow, const til::CoordType lastRow) const;
+
 private:
-    std::deque<ROW> _storage;
-    Cursor _cursor;
-
-    SHORT _firstRow; // indexes top row (not necessarily 0)
-
-    TextAttribute _currentAttributes;
-
-    // storage location for glyphs that can't fit into the buffer normally
-    UnicodeStorage _unicodeStorage;
-
-    void _RefreshRowIDs(std::optional<SHORT> newRowWidth);
-
-    Microsoft::Console::Render::IRenderTarget& _renderTarget;
-
-    void _SetFirstRowIndex(const SHORT FirstRowIndex) noexcept;
-
-    COORD _GetPreviousFromCursor() const;
-
-    void _SetWrapOnCurrentRow();
-    void _AdjustWrapOnCurrentRow(const bool fSet);
-
-    void _NotifyPaint(const Microsoft::Console::Types::Viewport& viewport) const;
-
+    void _UpdateSize();
+    void _SetFirstRowIndex(const til::CoordType FirstRowIndex) noexcept;
+    til::point _GetPreviousFromCursor() const noexcept;
+    void _SetWrapOnCurrentRow() noexcept;
+    void _AdjustWrapOnCurrentRow(const bool fSet) noexcept;
     // Assist with maintaining proper buffer state for Double Byte character sequences
     bool _PrepareForDoubleByteSequence(const DbcsAttribute dbcsAttribute);
     bool _AssertValidDoubleByteSequence(const DbcsAttribute dbcsAttribute);
+    ROW& _GetFirstRow() noexcept;
+    void _ExpandTextRow(til::inclusive_rect& selectionRow) const;
+    DelimiterClass _GetDelimiterClassAt(const til::point pos, const std::wstring_view wordDelimiters) const noexcept;
+    til::point _GetWordStartForAccessibility(const til::point target, const std::wstring_view wordDelimiters) const noexcept;
+    til::point _GetWordStartForSelection(const til::point target, const std::wstring_view wordDelimiters) const noexcept;
+    til::point _GetWordEndForAccessibility(const til::point target, const std::wstring_view wordDelimiters, const til::point limit) const;
+    til::point _GetWordEndForSelection(const til::point target, const std::wstring_view wordDelimiters) const noexcept;
+    void _PruneHyperlinks();
 
-    ROW& _GetFirstRow();
-    ROW& _GetPrevRowNoWrap(const ROW& row);
+    static void _AppendRTFText(std::ostringstream& contentBuilder, const std::wstring_view& text);
 
-    enum class DelimiterClass
-    {
-        ControlChar,
-        DelimiterChar,
-        RegularChar
-    };
-    DelimiterClass _GetDelimiterClass(const std::wstring_view cellChar, const std::wstring_view wordDelimiters) const noexcept;
+    Microsoft::Console::Render::Renderer& _renderer;
+
+    std::unordered_map<uint16_t, std::wstring> _hyperlinkMap;
+    std::unordered_map<std::wstring, uint16_t> _hyperlinkCustomIdMap;
+    uint16_t _currentHyperlinkId = 1;
+
+    std::unordered_map<size_t, std::wstring> _idsAndPatterns;
+    size_t _currentPatternId = 0;
+
+    wil::unique_virtualalloc_ptr<std::byte> _charBuffer;
+    std::vector<ROW> _storage;
+    TextAttribute _currentAttributes;
+    til::CoordType _firstRow = 0; // indexes top row (not necessarily 0)
+
+    Cursor _cursor;
+    Microsoft::Console::Types::Viewport _size;
+
+    bool _isActiveBuffer = false;
 
 #ifdef UNIT_TESTING
     friend class TextBufferTests;

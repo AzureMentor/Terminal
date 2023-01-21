@@ -26,18 +26,16 @@ public:
                                              _In_ ULONG ShareAccess,
                                              _In_ ULONG OpenOptions);
 
-    ~WinNTControl();
-
 private:
     WinNTControl();
 
-    WinNTControl(WinNTControl const&) = delete;
-    void operator=(WinNTControl const&) = delete;
+    WinNTControl(const WinNTControl&) = delete;
+    void operator=(const WinNTControl&) = delete;
 
     static WinNTControl& GetInstance();
 
     wil::unique_hmodule const _NtDllDll;
 
     typedef NTSTATUS(NTAPI* PfnNtOpenFile)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK, ULONG, ULONG);
-    PfnNtOpenFile const _NtOpenFile;
+    const PfnNtOpenFile _NtOpenFile;
 };

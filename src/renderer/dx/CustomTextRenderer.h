@@ -4,36 +4,66 @@
 #pragma once
 
 #include <wrl/implements.h>
+#include "BoxDrawingEffect.h"
+#include "../../renderer/inc/CursorOptions.h"
 
 namespace Microsoft::Console::Render
 {
     struct DrawingContext
     {
         DrawingContext(ID2D1RenderTarget* renderTarget,
-                       ID2D1Brush* foregroundBrush,
-                       ID2D1Brush* backgroundBrush,
+                       ID2D1SolidColorBrush* foregroundBrush,
+                       ID2D1SolidColorBrush* backgroundBrush,
+                       bool forceGrayscaleAA,
                        IDWriteFactory* dwriteFactory,
                        const DWRITE_LINE_SPACING spacing,
                        const D2D_SIZE_F cellSize,
-                       const D2D1_DRAW_TEXT_OPTIONS options = D2D1_DRAW_TEXT_OPTIONS_NONE) noexcept
+                       const D2D_SIZE_F targetSize,
+                       const std::optional<CursorOptions>& cursorInfo,
+                       const D2D1_DRAW_TEXT_OPTIONS options = D2D1_DRAW_TEXT_OPTIONS_NONE) noexcept :
+            renderTarget(renderTarget),
+            foregroundBrush(foregroundBrush),
+            backgroundBrush(backgroundBrush),
+            useBoldFont(false),
+            useItalicFont(false),
+            forceGrayscaleAA(forceGrayscaleAA),
+            dwriteFactory(dwriteFactory),
+            spacing(spacing),
+            cellSize(cellSize),
+            targetSize(targetSize),
+            cursorInfo(cursorInfo),
+            options(options),
+            topClipOffset(0),
+            bottomClipOffset(0)
         {
-            this->renderTarget = renderTarget;
-            this->foregroundBrush = foregroundBrush;
-            this->backgroundBrush = backgroundBrush;
-            this->dwriteFactory = dwriteFactory;
-            this->spacing = spacing;
-            this->cellSize = cellSize;
-            this->options = options;
         }
 
         ID2D1RenderTarget* renderTarget;
-        ID2D1Brush* foregroundBrush;
-        ID2D1Brush* backgroundBrush;
+        ID2D1SolidColorBrush* foregroundBrush;
+        ID2D1SolidColorBrush* backgroundBrush;
+        bool useBoldFont;
+        bool useItalicFont;
+        bool forceGrayscaleAA;
         IDWriteFactory* dwriteFactory;
         DWRITE_LINE_SPACING spacing;
         D2D_SIZE_F cellSize;
+        D2D_SIZE_F targetSize;
+        std::optional<CursorOptions> cursorInfo;
         D2D1_DRAW_TEXT_OPTIONS options;
+        FLOAT topClipOffset;
+        FLOAT bottomClipOffset;
     };
+
+    // Helper to choose which Direct2D method to use when drawing the cursor rectangle
+    enum class CursorPaintType
+    {
+        Fill,
+        Outline
+    };
+
+    constexpr const ULONG MinCursorHeightPixels = 1;
+    constexpr const ULONG MinCursorHeightPercent = 1;
+    constexpr const ULONG MaxCursorHeightPercent = 100;
 
     class CustomTextRenderer : public ::Microsoft::WRL::RuntimeClass<::Microsoft::WRL::RuntimeClassFlags<::Microsoft::WRL::ClassicCom | ::Microsoft::WRL::InhibitFtmBase>, IDWriteTextRenderer>
     {
@@ -80,6 +110,13 @@ namespace Microsoft::Console::Render
                                                                  BOOL isRightToLeft,
                                                                  IUnknown* clientDrawingEffect) noexcept override;
 
+        [[nodiscard]] HRESULT STDMETHODCALLTYPE EndClip(void* clientDrawingContext) noexcept;
+
+        [[nodiscard]] static HRESULT DrawCursor(gsl::not_null<ID2D1DeviceContext*> d2dContext,
+                                                D2D1_RECT_F textRunBounds,
+                                                const DrawingContext& drawingContext,
+                                                const bool firstPass);
+
     private:
         [[nodiscard]] HRESULT _FillRectangle(void* clientDrawingContext,
                                              IUnknown* clientDrawingEffect,
@@ -95,18 +132,22 @@ namespace Microsoft::Console::Render
                                                  DWRITE_MEASURING_MODE measuringMode,
                                                  _In_ const DWRITE_GLYPH_RUN* glyphRun,
                                                  _In_opt_ const DWRITE_GLYPH_RUN_DESCRIPTION* glyphRunDescription,
-                                                 ID2D1Brush* brush);
+                                                 ID2D1Brush* brush,
+                                                 _In_opt_ IUnknown* clientDrawingEffect);
 
-        [[nodiscard]] HRESULT _DrawBasicGlyphRunManually(DrawingContext* clientDrawingContext,
-                                                         D2D1_POINT_2F baselineOrigin,
-                                                         DWRITE_MEASURING_MODE measuringMode,
-                                                         _In_ const DWRITE_GLYPH_RUN* glyphRun,
-                                                         _In_opt_ const DWRITE_GLYPH_RUN_DESCRIPTION* glyphRunDescription) noexcept;
+        [[nodiscard]] HRESULT _DrawBoxRunManually(DrawingContext* clientDrawingContext,
+                                                  D2D1_POINT_2F baselineOrigin,
+                                                  DWRITE_MEASURING_MODE measuringMode,
+                                                  _In_ const DWRITE_GLYPH_RUN* glyphRun,
+                                                  _In_opt_ const DWRITE_GLYPH_RUN_DESCRIPTION* glyphRunDescription,
+                                                  _In_ IBoxDrawingEffect* clientDrawingEffect) noexcept;
 
         [[nodiscard]] HRESULT _DrawGlowGlyphRun(DrawingContext* clientDrawingContext,
                                                 D2D1_POINT_2F baselineOrigin,
                                                 DWRITE_MEASURING_MODE measuringMode,
                                                 _In_ const DWRITE_GLYPH_RUN* glyphRun,
                                                 _In_opt_ const DWRITE_GLYPH_RUN_DESCRIPTION* glyphRunDescription) noexcept;
+
+        std::optional<D2D1_RECT_F> _clipRect;
     };
 }

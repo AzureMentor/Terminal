@@ -3,7 +3,7 @@
 
 #include "precomp.h"
 
-#include "..\types\WindowUiaProviderBase.hpp"
+#include "windowUiaProvider.hpp"
 #include "screenInfoUiaProvider.hpp"
 
 using namespace Microsoft::Console::Types;
@@ -12,8 +12,8 @@ using namespace Microsoft::Console::Interactivity;
 using namespace Microsoft::Console::Interactivity::Win32;
 using namespace Microsoft::WRL;
 
-HRESULT ScreenInfoUiaProvider::RuntimeClassInitialize(_In_ Microsoft::Console::Types::IUiaData* pData,
-                                                      _In_ Microsoft::Console::Types::WindowUiaProviderBase* const pUiaParent)
+HRESULT ScreenInfoUiaProvider::RuntimeClassInitialize(_In_ Render::IRenderData* pData,
+                                                      _In_ WindowUiaProvider* const pUiaParent)
 {
     RETURN_HR_IF_NULL(E_INVALIDARG, pUiaParent);
     RETURN_HR_IF_NULL(E_INVALIDARG, pData);
@@ -57,7 +57,7 @@ IFACEMETHODIMP ScreenInfoUiaProvider::get_BoundingRectangle(_Out_ UiaRect* pRect
     // TODO GitHub #1914: Re-attach Tracing to UIA Tree
     //Tracing::s_TraceUia(this, ApiCall::GetBoundingRectangle, nullptr);
 
-    RECT rc = _pUiaParent->GetWindowRect();
+    auto rc = _pUiaParent->GetWindowRect();
 
     pRect->left = rc.left;
     pRect->top = rc.top;
@@ -92,31 +92,27 @@ HWND ScreenInfoUiaProvider::GetWindowHandle() const
     return _pUiaParent->GetWindowHandle();
 }
 
-void ScreenInfoUiaProvider::ChangeViewport(const SMALL_RECT NewWindow)
+void ScreenInfoUiaProvider::ChangeViewport(const til::inclusive_rect& NewWindow)
 {
     _pUiaParent->ChangeViewport(NewWindow);
 }
 
-HRESULT ScreenInfoUiaProvider::GetSelectionRanges(_In_ IRawElementProviderSimple* pProvider, const std::wstring_view wordDelimiters, _Out_ std::deque<ComPtr<UiaTextRangeBase>>& result)
+HRESULT ScreenInfoUiaProvider::GetSelectionRange(_In_ IRawElementProviderSimple* pProvider, const std::wstring_view wordDelimiters, _COM_Outptr_result_maybenull_ Microsoft::Console::Types::UiaTextRangeBase** ppUtr)
 {
-    try
-    {
-        result.clear();
-        typename std::remove_reference<decltype(result)>::type temporaryResult;
+    RETURN_HR_IF_NULL(E_INVALIDARG, ppUtr);
+    *ppUtr = nullptr;
 
-        std::deque<ComPtr<UiaTextRange>> ranges;
-        RETURN_IF_FAILED(UiaTextRange::GetSelectionRanges(_pData, pProvider, wordDelimiters, ranges));
+    const auto start = _pData->GetSelectionAnchor();
 
-        while (!ranges.empty())
-        {
-            temporaryResult.emplace_back(std::move(ranges.back()));
-            ranges.pop_back();
-        }
+    // we need to make end exclusive
+    auto end = _pData->GetSelectionEnd();
+    _pData->GetTextBuffer().GetSize().IncrementInBounds(end, true);
 
-        std::swap(result, temporaryResult);
-        return S_OK;
-    }
-    CATCH_RETURN();
+    // TODO GH #4509: Box Selection is misrepresented here as a line selection.
+    UiaTextRange* result;
+    RETURN_IF_FAILED(MakeAndInitialize<UiaTextRange>(&result, _pData, pProvider, start, end, _pData->IsBlockSelection(), wordDelimiters));
+    *ppUtr = result;
+    return S_OK;
 }
 
 HRESULT ScreenInfoUiaProvider::CreateTextRange(_In_ IRawElementProviderSimple* const pProvider, const std::wstring_view wordDelimiters, _COM_Outptr_result_maybenull_ UiaTextRangeBase** ppUtr)
@@ -143,16 +139,15 @@ HRESULT ScreenInfoUiaProvider::CreateTextRange(_In_ IRawElementProviderSimple* c
 }
 
 HRESULT ScreenInfoUiaProvider::CreateTextRange(_In_ IRawElementProviderSimple* const pProvider,
-                                               const Endpoint start,
-                                               const Endpoint end,
-                                               const bool degenerate,
+                                               const til::point start,
+                                               const til::point end,
                                                const std::wstring_view wordDelimiters,
                                                _COM_Outptr_result_maybenull_ UiaTextRangeBase** ppUtr)
 {
     RETURN_HR_IF_NULL(E_INVALIDARG, ppUtr);
     *ppUtr = nullptr;
     UiaTextRange* result = nullptr;
-    RETURN_IF_FAILED(MakeAndInitialize<UiaTextRange>(&result, _pData, pProvider, start, end, degenerate, wordDelimiters));
+    RETURN_IF_FAILED(MakeAndInitialize<UiaTextRange>(&result, _pData, pProvider, start, end, false, wordDelimiters));
     *ppUtr = result;
     return S_OK;
 }

@@ -3,476 +3,467 @@
 
 #include "pch.h"
 #include "Terminal.hpp"
+#include "tracing.hpp"
+
 #include "../src/inc/unicode.hpp"
 
 using namespace Microsoft::Terminal::Core;
+using namespace Microsoft::Console::Render;
 using namespace Microsoft::Console::Types;
 using namespace Microsoft::Console::VirtualTerminal;
 
-// Print puts the text in the buffer and moves the cursor
-bool Terminal::PrintString(std::wstring_view stringView)
-{
-    _WriteBuffer(stringView);
-    return true;
-}
+// Note: Generate GUID using TlgGuid.exe tool
+#pragma warning(suppress : 26477) // One of the macros uses 0/NULL. We don't have control to make it nullptr.
+TRACELOGGING_DEFINE_PROVIDER(g_hCTerminalCoreProvider,
+                             "Microsoft.Terminal.Core",
+                             // {103ac8cf-97d2-51aa-b3ba-5ffd5528fa5f}
+                             (0x103ac8cf, 0x97d2, 0x51aa, 0xb3, 0xba, 0x5f, 0xfd, 0x55, 0x28, 0xfa, 0x5f),
+                             TraceLoggingOptionMicrosoftTelemetry());
 
-bool Terminal::ExecuteChar(wchar_t wch)
+void Terminal::ReturnResponse(const std::wstring_view response)
 {
-    std::wstring_view view{ &wch, 1 };
-    _WriteBuffer(view);
-    return true;
-}
-
-bool Terminal::SetTextToDefaults(bool foreground, bool background)
-{
-    TextAttribute attrs = _buffer->GetCurrentAttributes();
-    if (foreground)
+    if (_pfnWriteInput)
     {
-        attrs.SetDefaultForeground();
+        _pfnWriteInput(response);
     }
-    if (background)
+}
+
+Microsoft::Console::VirtualTerminal::StateMachine& Terminal::GetStateMachine() noexcept
+{
+    return *_stateMachine;
+}
+
+TextBuffer& Terminal::GetTextBuffer() noexcept
+{
+    return _activeBuffer();
+}
+
+til::rect Terminal::GetViewport() const noexcept
+{
+    return til::rect{ _GetMutableViewport().ToInclusive() };
+}
+
+void Terminal::SetViewportPosition(const til::point position) noexcept
+{
+    // The viewport is fixed at 0,0 for the alt buffer, so this is a no-op.
+    if (!_inAltBuffer())
     {
-        attrs.SetDefaultBackground();
+        const auto dimensions = _GetMutableViewport().Dimensions();
+        _mutableViewport = Viewport::FromDimensions(position, dimensions);
+        Terminal::_NotifyScrollEvent();
     }
-    _buffer->SetCurrentAttributes(attrs);
+}
+
+void Terminal::SetTextAttributes(const TextAttribute& attrs) noexcept
+{
+    _activeBuffer().SetCurrentAttributes(attrs);
+}
+
+void Terminal::SetAutoWrapMode(const bool /*wrapAtEOL*/) noexcept
+{
+    // TODO: This will be needed to support DECAWM.
+}
+
+bool Terminal::GetAutoWrapMode() const noexcept
+{
+    // TODO: This will be needed to support DECAWM.
     return true;
 }
 
-bool Terminal::SetTextForegroundIndex(BYTE colorIndex)
+void Terminal::SetScrollingRegion(const til::inclusive_rect& /*scrollMargins*/) noexcept
 {
-    TextAttribute attrs = _buffer->GetCurrentAttributes();
-    attrs.SetIndexedAttributes({ colorIndex }, {});
-    _buffer->SetCurrentAttributes(attrs);
-    return true;
+    // TODO: This will be needed to fully support DECSTBM.
 }
 
-bool Terminal::SetTextBackgroundIndex(BYTE colorIndex)
+void Terminal::WarningBell()
 {
-    TextAttribute attrs = _buffer->GetCurrentAttributes();
-    attrs.SetIndexedAttributes({}, { colorIndex });
-    _buffer->SetCurrentAttributes(attrs);
-    return true;
+    _pfnWarningBell();
 }
 
-bool Terminal::SetTextRgbColor(COLORREF color, bool foreground)
+bool Terminal::GetLineFeedMode() const noexcept
 {
-    TextAttribute attrs = _buffer->GetCurrentAttributes();
-    attrs.SetColor(color, foreground);
-    _buffer->SetCurrentAttributes(attrs);
-    return true;
+    // TODO: This will be needed to support LNM.
+    return false;
 }
 
-bool Terminal::BoldText(bool boldOn)
+void Terminal::LineFeed(const bool withReturn, const bool wrapForced)
 {
-    TextAttribute attrs = _buffer->GetCurrentAttributes();
-    if (boldOn)
+    auto cursorPos = _activeBuffer().GetCursor().GetPosition();
+
+    // If the line was forced to wrap, set the wrap status.
+    // When explicitly moving down a row, clear the wrap status.
+    _activeBuffer().GetRowByOffset(cursorPos.y).SetWrapForced(wrapForced);
+
+    cursorPos.y++;
+    if (withReturn)
     {
-        attrs.Embolden();
+        cursorPos.x = 0;
     }
-    else
+    _AdjustCursorPosition(cursorPos);
+}
+
+void Terminal::SetWindowTitle(const std::wstring_view title)
+{
+    if (!_suppressApplicationTitle)
     {
-        attrs.Debolden();
+        _title.emplace(title);
+        _pfnTitleChanged(_title.value());
     }
-    _buffer->SetCurrentAttributes(attrs);
-    return true;
 }
 
-bool Terminal::UnderlineText(bool underlineOn)
+CursorType Terminal::GetUserDefaultCursorStyle() const noexcept
 {
-    TextAttribute attrs = _buffer->GetCurrentAttributes();
-    WORD metaAttrs = attrs.GetMetaAttributes();
-
-    WI_UpdateFlag(metaAttrs, COMMON_LVB_UNDERSCORE, underlineOn);
-
-    attrs.SetMetaAttributes(metaAttrs);
-    _buffer->SetCurrentAttributes(attrs);
-    return true;
+    return _defaultCursorShape;
 }
 
-bool Terminal::ReverseText(bool reversed)
+bool Terminal::ResizeWindow(const til::CoordType /*width*/, const til::CoordType /*height*/) noexcept
 {
-    TextAttribute attrs = _buffer->GetCurrentAttributes();
-    WORD metaAttrs = attrs.GetMetaAttributes();
-
-    WI_UpdateFlag(metaAttrs, COMMON_LVB_REVERSE_VIDEO, reversed);
-
-    attrs.SetMetaAttributes(metaAttrs);
-    _buffer->SetCurrentAttributes(attrs);
-    return true;
+    // TODO: This will be needed to support various resizing sequences. See also GH#1860.
+    return false;
 }
 
-bool Terminal::SetCursorPosition(short x, short y)
+void Terminal::SetConsoleOutputCP(const unsigned int /*codepage*/) noexcept
 {
-    const auto viewport = _GetMutableViewport();
-    const auto viewOrigin = viewport.Origin();
-    const short absoluteX = viewOrigin.X + x;
-    const short absoluteY = viewOrigin.Y + y;
-    COORD newPos{ absoluteX, absoluteY };
-    viewport.Clamp(newPos);
-    _buffer->GetCursor().SetPosition(newPos);
-
-    return true;
+    // TODO: This will be needed to support 8-bit charsets and DOCS sequences.
 }
 
-COORD Terminal::GetCursorPosition()
+unsigned int Terminal::GetConsoleOutputCP() const noexcept
 {
-    const auto absoluteCursorPos = _buffer->GetCursor().GetPosition();
-    const auto viewport = _GetMutableViewport();
-    const auto viewOrigin = viewport.Origin();
-    const short relativeX = absoluteCursorPos.X - viewOrigin.X;
-    const short relativeY = absoluteCursorPos.Y - viewOrigin.Y;
-    COORD newPos{ relativeX, relativeY };
+    // TODO: See SetConsoleOutputCP above.
+    return CP_UTF8;
+}
 
-    // TODO assert that the coord is > (0, 0) && <(view.W, view.H)
-    return newPos;
+void Terminal::SetBracketedPasteMode(const bool enabled) noexcept
+{
+    _bracketedPasteMode = enabled;
+}
+
+std::optional<bool> Terminal::GetBracketedPasteMode() const noexcept
+{
+    return _bracketedPasteMode;
+}
+
+void Terminal::CopyToClipboard(std::wstring_view content)
+{
+    _pfnCopyToClipboard(content);
 }
 
 // Method Description:
-// - deletes uiCount characters starting from the cursor's current position
-// - it moves over the remaining text to 'replace' the deleted text
-// - for example, if the buffer looks like this ('|' is the cursor): [abc|def]
-// - calling DeleteCharacter(1) will change it to: [abc|ef],
-// - i.e. the 'd' gets deleted and the 'ef' gets shifted over 1 space and **retain their previous text attributes**
+// - Updates the taskbar progress indicator
 // Arguments:
-// - uiCount, the number of characters to delete
-// Return value:
-// - true if succeeded, false otherwise
-bool Terminal::DeleteCharacter(const unsigned int uiCount)
-{
-    SHORT dist;
-    if (!SUCCEEDED(UIntToShort(uiCount, &dist)))
-    {
-        return false;
-    }
-    const auto cursorPos = _buffer->GetCursor().GetPosition();
-    const auto copyToPos = cursorPos;
-    const COORD copyFromPos{ cursorPos.X + dist, cursorPos.Y };
-    auto sourceWidth = _mutableViewport.RightExclusive() - copyFromPos.X;
-    SHORT width;
-    if (!SUCCEEDED(UIntToShort(sourceWidth, &width)))
-    {
-        return false;
-    }
-
-    // Get a rectangle of the source
-    auto source = Viewport::FromDimensions(copyFromPos, width, 1);
-
-    // Get a rectangle of the target
-    const auto target = Viewport::FromDimensions(copyToPos, source.Dimensions());
-    const auto walkDirection = Viewport::DetermineWalkDirection(source, target);
-
-    auto sourcePos = source.GetWalkOrigin(walkDirection);
-    auto targetPos = target.GetWalkOrigin(walkDirection);
-
-    // Iterate over the source cell data and copy it over to the target
-    do
-    {
-        const auto data = OutputCell(*(_buffer->GetCellDataAt(sourcePos)));
-        _buffer->Write(OutputCellIterator({ &data, 1 }), targetPos);
-    } while (source.WalkInBounds(sourcePos, walkDirection) && target.WalkInBounds(targetPos, walkDirection));
-
-    return true;
-}
-
-// Method Description:
-// - Inserts uiCount spaces starting from the cursor's current position, moving over the existing text
-// - for example, if the buffer looks like this ('|' is the cursor): [abc|def]
-// - calling InsertCharacter(1) will change it to: [abc| def],
-// - i.e. the 'def' gets shifted over 1 space and **retain their previous text attributes**
-// Arguments:
-// - uiCount, the number of spaces to insert
-// Return value:
-// - true if succeeded, false otherwise
-bool Terminal::InsertCharacter(const unsigned int uiCount)
-{
-    // NOTE: the code below is _extremely_ similar to DeleteCharacter
-    // We will want to use this same logic and implement a helper function instead
-    // that does the 'move a region from here to there' operation
-    // TODO: Github issue #2163
-    SHORT dist;
-    if (!SUCCEEDED(UIntToShort(uiCount, &dist)))
-    {
-        return false;
-    }
-    const auto cursorPos = _buffer->GetCursor().GetPosition();
-    const auto copyFromPos = cursorPos;
-    const COORD copyToPos{ cursorPos.X + dist, cursorPos.Y };
-    auto sourceWidth = _mutableViewport.RightExclusive() - copyFromPos.X;
-    SHORT width;
-    if (!SUCCEEDED(UIntToShort(sourceWidth, &width)))
-    {
-        return false;
-    }
-
-    // Get a rectangle of the source
-    auto source = Viewport::FromDimensions(copyFromPos, width, 1);
-    const auto sourceOrigin = source.Origin();
-
-    // Get a rectangle of the target
-    const auto target = Viewport::FromDimensions(copyToPos, source.Dimensions());
-    const auto walkDirection = Viewport::DetermineWalkDirection(source, target);
-
-    auto sourcePos = source.GetWalkOrigin(walkDirection);
-    auto targetPos = target.GetWalkOrigin(walkDirection);
-
-    // Iterate over the source cell data and copy it over to the target
-    do
-    {
-        const auto data = OutputCell(*(_buffer->GetCellDataAt(sourcePos)));
-        _buffer->Write(OutputCellIterator({ &data, 1 }), targetPos);
-    } while (source.WalkInBounds(sourcePos, walkDirection) && target.WalkInBounds(targetPos, walkDirection));
-    auto eraseIter = OutputCellIterator(UNICODE_SPACE, _buffer->GetCurrentAttributes(), dist);
-    _buffer->Write(eraseIter, cursorPos);
-
-    return true;
-}
-
-bool Terminal::EraseCharacters(const unsigned int numChars)
-{
-    const auto absoluteCursorPos = _buffer->GetCursor().GetPosition();
-    const auto viewport = _GetMutableViewport();
-    const short distanceToRight = viewport.RightExclusive() - absoluteCursorPos.X;
-    const short fillLimit = std::min(static_cast<short>(numChars), distanceToRight);
-    auto eraseIter = OutputCellIterator(UNICODE_SPACE, _buffer->GetCurrentAttributes(), fillLimit);
-    _buffer->Write(eraseIter, absoluteCursorPos);
-    return true;
-}
-
-// Method description:
-// - erases a line of text, either from
-// 1. beginning to the cursor's position
-// 2. cursor's position to end
-// 3. beginning to end
-// - depending on the erase type
-// Arguments:
-// - the erase type
-// Return value:
-// - true if succeeded, false otherwise
-bool Terminal::EraseInLine(const ::Microsoft::Console::VirtualTerminal::DispatchTypes::EraseType eraseType)
-{
-    const auto cursorPos = _buffer->GetCursor().GetPosition();
-    const auto viewport = _GetMutableViewport();
-    COORD startPos = { 0 };
-    startPos.Y = cursorPos.Y;
-    // nlength determines the number of spaces we need to write
-    DWORD nlength = 0;
-
-    // Determine startPos.X and nlength by the eraseType
-    switch (eraseType)
-    {
-    case DispatchTypes::EraseType::FromBeginning:
-        nlength = cursorPos.X - viewport.Left() + 1;
-        break;
-    case DispatchTypes::EraseType::ToEnd:
-        startPos.X = cursorPos.X;
-        nlength = viewport.RightExclusive() - startPos.X;
-        break;
-    case DispatchTypes::EraseType::All:
-        startPos.X = viewport.Left();
-        nlength = viewport.RightExclusive() - startPos.X;
-        break;
-    case DispatchTypes::EraseType::Scrollback:
-        return false;
-    }
-
-    auto eraseIter = OutputCellIterator(UNICODE_SPACE, _buffer->GetCurrentAttributes(), nlength);
-
-    // Explicitly turn off end-of-line wrap-flag-setting when erasing cells.
-    _buffer->Write(eraseIter, startPos, false);
-    return true;
-}
-
-// Method description:
-// - erases text in the buffer in two ways depending on erase type
-// 1. 'erases' all text visible to the user (i.e. the text in the viewport)
-// 2. erases all the text in the scrollback
-// Arguments:
-// - the erase type
+// - state: indicates the progress state
+// - progress: indicates the progress value
 // Return Value:
-// - true if succeeded, false otherwise
-bool Terminal::EraseInDisplay(const DispatchTypes::EraseType eraseType)
+// - <none>
+void Terminal::SetTaskbarProgress(const ::Microsoft::Console::VirtualTerminal::DispatchTypes::TaskbarState state, const size_t progress)
 {
-    // Store the relative cursor position so we can restore it later after we move the viewport
-    const auto cursorPos = _buffer->GetCursor().GetPosition();
-    auto relativeCursor = cursorPos;
-    _mutableViewport.ConvertToOrigin(&relativeCursor);
+    _taskbarState = static_cast<size_t>(state);
 
-    // Initialize the new location of the viewport
-    // the top and bottom parameters are determined by the eraseType
-    SMALL_RECT newWin;
-    newWin.Left = _mutableViewport.Left();
-    newWin.Right = _mutableViewport.RightExclusive();
-
-    if (eraseType == DispatchTypes::EraseType::All)
+    switch (state)
     {
-        // In this case, we simply move the viewport down, effectively pushing whatever text was on the screen into the scrollback
-        // and thus 'erasing' the text visible to the user
-        const auto coordLastChar = _buffer->GetLastNonSpaceCharacter(_mutableViewport);
-        if (coordLastChar.X == 0 && coordLastChar.Y == 0)
+    case DispatchTypes::TaskbarState::Clear:
+        // Always set progress to 0 in this case
+        _taskbarProgress = 0;
+        break;
+    case DispatchTypes::TaskbarState::Set:
+        // Always set progress to the value given in this case
+        _taskbarProgress = progress;
+        break;
+    case DispatchTypes::TaskbarState::Indeterminate:
+        // Leave the progress value unchanged in this case
+        break;
+    case DispatchTypes::TaskbarState::Error:
+    case DispatchTypes::TaskbarState::Paused:
+        // In these 2 cases, if the given progress value is 0, then
+        // leave the progress value unchanged, unless the current progress
+        // value is 0, in which case set it to a 'minimum' value (10 in our case);
+        // if the given progress value is greater than 0, then set the progress value
+        if (progress == 0)
         {
-            // Nothing to clear, just return
-            return true;
+            if (_taskbarProgress == 0)
+            {
+                _taskbarProgress = TaskbarMinProgress;
+            }
         }
-
-        short sNewTop = coordLastChar.Y + 1;
-
-        // Increment the circular buffer only if the new location of the viewport would be 'below' the buffer
-        const short delta = (sNewTop + _mutableViewport.Height()) - (_buffer->GetSize().Height());
-        for (auto i = 0; i < delta; i++)
+        else
         {
-            _buffer->IncrementCircularBuffer();
-            sNewTop--;
+            _taskbarProgress = progress;
         }
-
-        newWin.Top = sNewTop;
-        newWin.Bottom = sNewTop + _mutableViewport.Height();
-    }
-    else if (eraseType == DispatchTypes::EraseType::Scrollback)
-    {
-        // We only want to erase the scrollback, and leave everything else on the screen as it is
-        // so we grab the text in the viewport and rotate it up to the top of the buffer
-        COORD scrollFromPos{ 0, 0 };
-        _mutableViewport.ConvertFromOrigin(&scrollFromPos);
-        _buffer->ScrollRows(scrollFromPos.Y, _mutableViewport.Height(), -scrollFromPos.Y);
-
-        // Since we only did a rotation, the text that was in the scrollback is now _below_ where we are going to move the viewport
-        // and we have to make sure we erase that text
-        auto eraseStart = _mutableViewport.Height();
-        auto eraseEnd = _buffer->GetLastNonSpaceCharacter(_mutableViewport).Y;
-        for (SHORT i = eraseStart; i <= eraseEnd; i++)
-        {
-            _buffer->GetRowByOffset(i).Reset(_buffer->GetCurrentAttributes());
-        }
-
-        // Reset the scroll offset now because there's nothing for the user to 'scroll' to
-        _scrollOffset = 0;
-
-        newWin.Top = 0;
-        newWin.Bottom = _mutableViewport.Height();
-    }
-    else
-    {
-        return false;
+        break;
     }
 
-    // Move the viewport, adjust the scoll bar if needed, and restore the old cursor position
-    _mutableViewport = Viewport::FromExclusive(newWin);
-    Terminal::_NotifyScrollEvent();
-    SetCursorPosition(relativeCursor.X, relativeCursor.Y);
-
-    return true;
+    if (_pfnTaskbarProgressChanged)
+    {
+        _pfnTaskbarProgressChanged();
+    }
 }
 
-bool Terminal::SetWindowTitle(std::wstring_view title)
+void Terminal::SetWorkingDirectory(std::wstring_view uri)
 {
-    _title = _suppressApplicationTitle ? _startingTitle : title;
+    static bool logged = false;
+    if (!logged)
+    {
+        TraceLoggingWrite(
+            g_hCTerminalCoreProvider,
+            "ShellIntegrationWorkingDirSet",
+            TraceLoggingDescription("The CWD was set by the client application"),
+            TraceLoggingKeyword(MICROSOFT_KEYWORD_MEASURES),
+            TelemetryPrivacyDataTag(PDT_ProductAndServiceUsage));
 
-    _pfnTitleChanged(_title);
+        logged = true;
+    }
 
-    return true;
+    _workingDirectory = uri;
 }
 
-// Method Description:
-// - Updates the value in the colortable at index tableIndex to the new color
-//   dwColor. dwColor is a COLORREF, format 0x00BBGGRR.
-// Arguments:
-// - tableIndex: the index of the color table to update.
-// - dwColor: the new COLORREF to use as that color table value.
-// Return Value:
-// - true iff we successfully updated the color table entry.
-bool Terminal::SetColorTableEntry(const size_t tableIndex, const COLORREF dwColor)
+void Terminal::PlayMidiNote(const int noteNumber, const int velocity, const std::chrono::microseconds duration)
 {
+    _pfnPlayMidiNote(noteNumber, velocity, duration);
+}
+
+void Terminal::UseAlternateScreenBuffer()
+{
+    // the new alt buffer is exactly the size of the viewport.
+    _altBufferSize = _mutableViewport.Dimensions();
+
+    const auto cursorSize = _mainBuffer->GetCursor().GetSize();
+
+    ClearSelection();
+    _mainBuffer->ClearPatternRecognizers();
+
+    // Create a new alt buffer
+    _altBuffer = std::make_unique<TextBuffer>(_altBufferSize,
+                                              TextAttribute{},
+                                              cursorSize,
+                                              true,
+                                              _mainBuffer->GetRenderer());
+    _mainBuffer->SetAsActiveBuffer(false);
+
+    // Copy our cursor state to the new buffer's cursor
+    {
+        // Update the alt buffer's cursor style, visibility, and position to match our own.
+        const auto& myCursor = _mainBuffer->GetCursor();
+        auto& tgtCursor = _altBuffer->GetCursor();
+        tgtCursor.SetStyle(myCursor.GetSize(), myCursor.GetType());
+        tgtCursor.SetIsVisible(myCursor.IsVisible());
+        tgtCursor.SetBlinkingAllowed(myCursor.IsBlinkingAllowed());
+
+        // The new position should match the viewport-relative position of the main buffer.
+        auto tgtCursorPos = myCursor.GetPosition();
+        tgtCursorPos.y -= _mutableViewport.Top();
+        tgtCursor.SetPosition(tgtCursorPos);
+    }
+
+    // update all the hyperlinks on the screen
+    _updateUrlDetection();
+
+    // GH#3321: Make sure we let the TerminalInput know that we switched
+    // buffers. This might affect how we interpret certain mouse events.
+    _terminalInput->UseAlternateScreenBuffer();
+
+    // Update scrollbars
+    _NotifyScrollEvent();
+
+    // redraw the screen
     try
     {
-        _colorTable.at(tableIndex) = dwColor;
-
-        // Repaint everything - the colors might have changed
-        _buffer->GetRenderTarget().TriggerRedrawAll();
-        return true;
+        _activeBuffer().TriggerRedrawAll();
     }
-    catch (std::out_of_range&)
+    CATCH_LOG();
+}
+void Terminal::UseMainScreenBuffer()
+{
+    // Short-circuit: do nothing.
+    if (!_inAltBuffer())
     {
-        return false;
+        return;
     }
-}
 
-// Method Description:
-// - Sets the cursor style to the given style.
-// Arguments:
-// - cursorStyle: the style to be set for the cursor
-// Return Value:
-// - true iff we successfully set the cursor style
-bool Terminal::SetCursorStyle(const DispatchTypes::CursorStyle cursorStyle)
-{
-    CursorType finalCursorType;
-    bool fShouldBlink;
+    ClearSelection();
 
-    switch (cursorStyle)
+    // Copy our cursor state back to the main buffer's cursor
     {
-    case DispatchTypes::CursorStyle::BlinkingBlockDefault:
-        [[fallthrough]];
-    case DispatchTypes::CursorStyle::BlinkingBlock:
-        finalCursorType = CursorType::FullBox;
-        fShouldBlink = true;
-        break;
-    case DispatchTypes::CursorStyle::SteadyBlock:
-        finalCursorType = CursorType::FullBox;
-        fShouldBlink = false;
-        break;
-    case DispatchTypes::CursorStyle::BlinkingUnderline:
-        finalCursorType = CursorType::Underscore;
-        fShouldBlink = true;
-        break;
-    case DispatchTypes::CursorStyle::SteadyUnderline:
-        finalCursorType = CursorType::Underscore;
-        fShouldBlink = false;
-        break;
-    case DispatchTypes::CursorStyle::BlinkingBar:
-        finalCursorType = CursorType::VerticalBar;
-        fShouldBlink = true;
-        break;
-    case DispatchTypes::CursorStyle::SteadyBar:
-        finalCursorType = CursorType::VerticalBar;
-        fShouldBlink = false;
-        break;
-    default:
-        finalCursorType = CursorType::Legacy;
-        fShouldBlink = false;
+        // Update the alt buffer's cursor style, visibility, and position to match our own.
+        const auto& myCursor = _altBuffer->GetCursor();
+        auto& tgtCursor = _mainBuffer->GetCursor();
+        tgtCursor.SetStyle(myCursor.GetSize(), myCursor.GetType());
+        tgtCursor.SetIsVisible(myCursor.IsVisible());
+        tgtCursor.SetBlinkingAllowed(myCursor.IsBlinkingAllowed());
+
+        // The new position should match the viewport-relative position of the main buffer.
+        // This is the equal and opposite effect of what we did in UseAlternateScreenBuffer
+        auto tgtCursorPos = myCursor.GetPosition();
+        tgtCursorPos.y += _mutableViewport.Top();
+        tgtCursor.SetPosition(tgtCursorPos);
     }
 
-    _buffer->GetCursor().SetType(finalCursorType);
-    _buffer->GetCursor().SetBlinkingAllowed(fShouldBlink);
+    _mainBuffer->SetAsActiveBuffer(true);
+    // destroy the alt buffer
+    _altBuffer = nullptr;
 
-    return true;
+    if (_deferredResize.has_value())
+    {
+        LOG_IF_FAILED(UserResize(_deferredResize.value()));
+        _deferredResize = std::nullopt;
+    }
+
+    // update all the hyperlinks on the screen
+    _mainBuffer->ClearPatternRecognizers();
+    _updateUrlDetection();
+
+    // GH#3321: Make sure we let the TerminalInput know that we switched
+    // buffers. This might affect how we interpret certain mouse events.
+    _terminalInput->UseMainScreenBuffer();
+
+    // Update scrollbars
+    _NotifyScrollEvent();
+
+    // redraw the screen
+    try
+    {
+        _activeBuffer().TriggerRedrawAll();
+    }
+    CATCH_LOG();
+}
+
+// NOTE: This is the version of AddMark that comes from VT
+void Terminal::MarkPrompt(const DispatchTypes::ScrollMark& mark)
+{
+    static bool logged = false;
+    if (!logged)
+    {
+        TraceLoggingWrite(
+            g_hCTerminalCoreProvider,
+            "ShellIntegrationMarkAdded",
+            TraceLoggingDescription("A mark was added via VT at least once"),
+            TraceLoggingKeyword(MICROSOFT_KEYWORD_MEASURES),
+            TelemetryPrivacyDataTag(PDT_ProductAndServiceUsage));
+
+        logged = true;
+    }
+
+    const til::point cursorPos{ _activeBuffer().GetCursor().GetPosition() };
+    AddMark(mark, cursorPos, cursorPos, false);
+
+    if (mark.category == DispatchTypes::MarkCategory::Prompt)
+    {
+        _currentPromptState = PromptState::Prompt;
+    }
+}
+
+void Terminal::MarkCommandStart()
+{
+    const til::point cursorPos{ _activeBuffer().GetCursor().GetPosition() };
+
+    if ((_currentPromptState == PromptState::Prompt) &&
+        (_scrollMarks.size() > 0))
+    {
+        // We were in the right state, and there's a previous mark to work
+        // with.
+        //
+        //We can just do the work below safely.
+    }
+    else
+    {
+        // If there was no last mark, or we're in a weird state,
+        // then abandon the current state, and just insert a new Prompt mark that
+        // start's & ends here, and got to State::Command.
+
+        DispatchTypes::ScrollMark mark;
+        mark.category = DispatchTypes::MarkCategory::Prompt;
+        AddMark(mark, cursorPos, cursorPos, false);
+    }
+    _scrollMarks.back().end = cursorPos;
+    _currentPromptState = PromptState::Command;
+}
+
+void Terminal::MarkOutputStart()
+{
+    const til::point cursorPos{ _activeBuffer().GetCursor().GetPosition() };
+
+    if ((_currentPromptState == PromptState::Command) &&
+        (_scrollMarks.size() > 0))
+    {
+        // We were in the right state, and there's a previous mark to work
+        // with.
+        //
+        //We can just do the work below safely.
+    }
+    else
+    {
+        // If there was no last mark, or we're in a weird state,
+        // then abandon the current state, and just insert a new Prompt mark that
+        // start's & ends here, and the command ends here, and go to State::Output.
+
+        DispatchTypes::ScrollMark mark;
+        mark.category = DispatchTypes::MarkCategory::Prompt;
+        AddMark(mark, cursorPos, cursorPos, false);
+    }
+    _scrollMarks.back().commandEnd = cursorPos;
+    _currentPromptState = PromptState::Output;
+}
+
+void Terminal::MarkCommandFinish(std::optional<unsigned int> error)
+{
+    const til::point cursorPos{ _activeBuffer().GetCursor().GetPosition() };
+    auto category = DispatchTypes::MarkCategory::Prompt;
+    if (error.has_value())
+    {
+        category = *error == 0u ?
+                       DispatchTypes::MarkCategory::Success :
+                       DispatchTypes::MarkCategory::Error;
+    }
+
+    if ((_currentPromptState == PromptState::Output) &&
+        (_scrollMarks.size() > 0))
+    {
+        // We were in the right state, and there's a previous mark to work
+        // with.
+        //
+        //We can just do the work below safely.
+    }
+    else
+    {
+        // If there was no last mark, or we're in a weird state, then abandon
+        // the current state, and just insert a new Prompt mark that start's &
+        // ends here, and the command ends here, AND the output ends here. and
+        // go to State::Output.
+
+        DispatchTypes::ScrollMark mark;
+        mark.category = DispatchTypes::MarkCategory::Prompt;
+        AddMark(mark, cursorPos, cursorPos, false);
+        _scrollMarks.back().commandEnd = cursorPos;
+    }
+    _scrollMarks.back().outputEnd = cursorPos;
+    _scrollMarks.back().category = category;
+    _currentPromptState = PromptState::None;
 }
 
 // Method Description:
-// - Updates the default foreground color from a COLORREF, format 0x00BBGGRR.
+// - Reacts to a client asking us to show or hide the window.
 // Arguments:
-// - dwColor: the new COLORREF to use as the default foreground color
+// - showOrHide - True for show. False for hide.
 // Return Value:
-// - true
-bool Terminal::SetDefaultForeground(const COLORREF dwColor)
+// - <none>
+void Terminal::ShowWindow(bool showOrHide)
 {
-    _defaultFg = dwColor;
-
-    // Repaint everything - the colors might have changed
-    _buffer->GetRenderTarget().TriggerRedrawAll();
-    return true;
+    if (_pfnShowWindowChanged)
+    {
+        _pfnShowWindowChanged(showOrHide);
+    }
 }
 
-// Method Description:
-// - Updates the default background color from a COLORREF, format 0x00BBGGRR.
-// Arguments:
-// - dwColor: the new COLORREF to use as the default background color
-// Return Value:
-// - true
-bool Terminal::SetDefaultBackground(const COLORREF dwColor)
+bool Terminal::IsConsolePty() const noexcept
 {
-    _defaultBg = dwColor;
-    _pfnBackgroundColorChanged(dwColor);
+    return false;
+}
 
-    // Repaint everything - the colors might have changed
-    _buffer->GetRenderTarget().TriggerRedrawAll();
-    return true;
+bool Terminal::IsVtInputEnabled() const noexcept
+{
+    return false;
+}
+
+void Terminal::NotifyAccessibilityChange(const til::rect& /*changedRect*/) noexcept
+{
+    // This is only needed in conhost. Terminal handles accessibility in another way.
 }

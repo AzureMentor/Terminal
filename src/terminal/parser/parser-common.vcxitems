@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project DefaultTargets="Build" ToolsVersion="14.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <!--
     Contains all the files for the Parser Project.
    -->
@@ -11,6 +11,7 @@
     <ClCompile Include="..\precomp.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="..\base64.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\ascii.hpp" />
@@ -20,5 +21,6 @@
     <ClInclude Include="..\OutputStateMachineEngine.hpp" />
     <ClInclude Include="..\telemetry.hpp" />
     <ClInclude Include="..\tracing.hpp" />
+    <ClInclude Include="..\base64.hpp" />
   </ItemGroup>
 </Project>

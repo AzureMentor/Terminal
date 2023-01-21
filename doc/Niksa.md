@@ -9,6 +9,8 @@ This document serves as a storage point for those posts.
 - [Output Processing between "Far East" and "Western"](#fesb)
 - [Why do we not backport things?](#backport)
 - [Why can't we have mixed elevated and non-elevated tabs in the Terminal?](#elevation)
+- [What's the difference between a shell and a terminal?](#shell-vs-terminal)
+
 
 ## <a name="cmd"></a>Why do we avoid changing CMD.exe?
 `setlocal` doesn't behave the same way as an environment variable. It's a thing that would have to be put in at the top of the batch script that is `somefile.cmd` as one of its first commands to adjust the way that one specific batch file is processed by the `cmd.exe` engine. That's probably not suitable for your needs, but that's the way we have to go.
@@ -33,7 +35,7 @@ Also, I'm happy to discuss this with you until you're utterly sick of reading it
 
 If I had to take an educated guess as to what is making us faster than pretty much any other application on Windows at putting your text on the screen... I would say it is because that is literally our only job! Also probably because we are using darn near the oldest and lowest level APIs that Windows has to accomplish this work.
 
-Pretty much everything else you've listed has some sort of layer or framework involved, or many, many layers and frameworks, when you start talking about Electron and Javascript. We don't. 
+Pretty much everything else you've listed has some sort of layer or framework involved, or many, many layers and frameworks, when you start talking about Electron and JavaScript. We don't. 
 
 We have one bare, super un-special window with no additional controls attached to it. We get our keys fed into us from just barely above the kernel given that we're processing them from window messages and not from some sort of eventing framework common to pretty much any other more complicated UI framework than ours (WPF, WinForms, UWP, Electron). And we dump our text straight onto the window surface using GDI's [PolyTextOut](https://docs.microsoft.com/en-us/windows/desktop/api/wingdi/nf-wingdi-polytextoutw) with no frills. 
 
@@ -143,7 +145,7 @@ Our only backport successes really come from corporations with massive addressab
 
 It's also costly in terms of time, effort, and testing for us to validate a modification to a released OS. We have a mindbogglingly massive amount of automated machinery dedicated to processing and validating the things that we check in while developing the current OS builds. But it's a special costly ask to spin up some to all of those activities to validate backported fixes. We do it all the time for Patch Tuesday, but in those patches, they only pass through the minimum number of fixes required to maximize the restoration of productivity/security/revenue/etc. because every additional fix adds additional complexity and additional risk. 
 
-So from our little team working hard to make developers happy, we virtually never make the cut for servicing. We're sorry, but we hope you can understand. It's just the reality of the situation to say "nope" when people ask for a backport. In our team's ideal world, you would all be running the latest console bits everywhere everytime we make a change. But that's just not how it is today.
+So from our little team working hard to make developers happy, we virtually never make the cut for servicing. We're sorry, but we hope you can understand. It's just the reality of the situation to say "nope" when people ask for a backport. In our team's ideal world, you would all be running the latest console bits everywhere every time we make a change. But that's just not how it is today.
 
 Original Source: https://github.com/microsoft/terminal/issues/279#issuecomment-439179675
 
@@ -161,7 +163,7 @@ Given that we're using Xaml islands to host a modern UI and stitching a DirectX 
 
 Now, the obvious followup question is _"why can't you have one elevated connection in a tab next to a non-elevated connection?"_ This is where @sba923 should pick up reading (:smile:). I'm probably going to cover some things that you (@robomac) know already.
 
-[2] When you have two windows on the same desktop in the same window station, they can communicate with eachother. I can use `SendKeys` easily through `WScript.Shell` to send keyboard input to any window that the shell can see.
+[2] When you have two windows on the same desktop in the same window station, they can communicate with each other. I can use `SendKeys` easily through `WScript.Shell` to send keyboard input to any window that the shell can see.
 
 Running a process elevated _severs_ that connection. The shell can't see the elevated window. No other program at the same integrity level as the shell can see the elevated window. Even if it has its window handle, it can't really interact with it. This is also why you can't drag/drop from explorer into notepad if notepad is running elevated. Only another elevated process can interact with another elevated window.
 
@@ -179,3 +181,20 @@ Other platforms have accepted that risk in preference for user convenience. They
 
 Original Source: https://github.com/microsoft/terminal/issues/632#issuecomment-519375707
 
+## <a name="shell-vs-terminal"></a>What's the difference between a shell and a terminal?
+
+_guest speaker @zadjii-msft_
+
+I think there might be a bit of a misunderstanding here - there are two different kinds of applications we're talking about here:
+* shell applications, like `cmd.exe`, `powershell`, `zsh`, etc. These are text-only applications that emit streams of characters. They don't care at all about how they're eventually rendered to the user. These are also sometimes referred to as "commandline client" applications.
+* terminal applications, like the Windows Terminal, gnome-terminal, xterm, iterm2, hyper. These are graphical applications that can be used to render the output of commandline clients. 
+
+On Windows, if you just run `cmd.exe` directly, the OS will create an instance of `conhost.exe` as the _terminal_ for `cmd.exe`. The same thing happens for `powershell.exe`, the system will create a new conhost window for any client that's not already connected to a terminal of some sort. This has lead to an enormous amount of confusion for people thinking that a conhost window is actually a "`cmd` window". `cmd` can't have a window, it's just a commandline application. Its window is always some other terminal.
+
+Any terminal can run any commandline client application. So you can use the Windows Terminal to run whatever shell you want. I use mine for both `cmd` and `powershell`, and also WSL:
+
+![image](https://user-images.githubusercontent.com/18356694/89556758-79d27e80-d7d7-11ea-84e2-10710e09ef4a.png)
+
+It's not the Terminal's responsibility to remember the commands executed by a commandline client. That's the responsibility of the _shell_. How would the terminal remember commands executed by something like `emacs` or `vim`? Those are both applications where the user is typing input and hitting enter, like they would at a cmd prompt, but without something that resembles a command history.
+
+Original Source: https://github.com/microsoft/terminal/issues/6500#issuecomment-670035468

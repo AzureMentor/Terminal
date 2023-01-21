@@ -2,8 +2,9 @@
 // Licensed under the MIT license.
 
 #include "precomp.h"
-
 #include "thread.hpp"
+
+#include "renderer.hpp"
 
 #pragma hdrstop
 
@@ -15,7 +16,9 @@ RenderThread::RenderThread() :
     _hEvent(nullptr),
     _hPaintCompletedEvent(nullptr),
     _fKeepRunning(true),
-    _hPaintEnabledEvent(nullptr)
+    _hPaintEnabledEvent(nullptr),
+    _fNextFrameRequested(false),
+    _fWaiting(false)
 {
 }
 
@@ -24,6 +27,7 @@ RenderThread::~RenderThread()
     if (_hThread)
     {
         _fKeepRunning = false; // stop loop after final run
+        EnablePainting(); // if we want to get the last frame out, we need to make sure it's enabled
         SignalObjectAndWait(_hEvent, _hThread, INFINITE, FALSE); // signal final paint and wait for thread to finish.
 
         CloseHandle(_hThread);
@@ -53,23 +57,23 @@ RenderThread::~RenderThread()
 // - Create all of the Events we'll need, and the actual thread we'll be doing
 //      work on.
 // Arguments:
-// - pRendererParent: the IRenderer that owns this thread, and which we should
+// - pRendererParent: the Renderer that owns this thread, and which we should
 //      trigger frames for.
 // Return Value:
 // - S_OK if we succeeded, else an HRESULT corresponding to a failure to create
 //      an Event or Thread.
-[[nodiscard]] HRESULT RenderThread::Initialize(IRenderer* const pRendererParent) noexcept
+[[nodiscard]] HRESULT RenderThread::Initialize(Renderer* const pRendererParent) noexcept
 {
     _pRenderer = pRendererParent;
 
-    HRESULT hr = S_OK;
+    auto hr = S_OK;
     // Create event before thread as thread will start immediately.
     if (SUCCEEDED(hr))
     {
-        HANDLE hEvent = CreateEventW(nullptr, // non-inheritable security attributes
-                                     FALSE, // auto reset event
-                                     FALSE, // initially unsignaled
-                                     nullptr // no name
+        auto hEvent = CreateEventW(nullptr, // non-inheritable security attributes
+                                   FALSE, // auto reset event
+                                   FALSE, // initially unsignaled
+                                   nullptr // no name
         );
 
         if (hEvent == nullptr)
@@ -84,10 +88,10 @@ RenderThread::~RenderThread()
 
     if (SUCCEEDED(hr))
     {
-        HANDLE hPaintEnabledEvent = CreateEventW(nullptr,
-                                                 TRUE, // manual reset event
-                                                 FALSE, // initially signaled
-                                                 nullptr);
+        auto hPaintEnabledEvent = CreateEventW(nullptr,
+                                               TRUE, // manual reset event
+                                               FALSE, // initially signaled
+                                               nullptr);
 
         if (hPaintEnabledEvent == nullptr)
         {
@@ -101,10 +105,10 @@ RenderThread::~RenderThread()
 
     if (SUCCEEDED(hr))
     {
-        HANDLE hPaintCompletedEvent = CreateEventW(nullptr,
-                                                   TRUE, // manual reset event
-                                                   TRUE, // initially signaled
-                                                   nullptr);
+        auto hPaintCompletedEvent = CreateEventW(nullptr,
+                                                 TRUE, // manual reset event
+                                                 TRUE, // initially signaled
+                                                 nullptr);
 
         if (hPaintCompletedEvent == nullptr)
         {
@@ -118,12 +122,12 @@ RenderThread::~RenderThread()
 
     if (SUCCEEDED(hr))
     {
-        HANDLE hThread = CreateThread(nullptr, // non-inheritable security attributes
-                                      0, // use default stack size
-                                      s_ThreadProc,
-                                      this,
-                                      0, // create immediately
-                                      nullptr // we don't need the thread ID
+        auto hThread = CreateThread(nullptr, // non-inheritable security attributes
+                                    0, // use default stack size
+                                    s_ThreadProc,
+                                    this,
+                                    0, // create immediately
+                                    nullptr // we don't need the thread ID
         );
 
         if (hThread == nullptr)
@@ -133,6 +137,14 @@ RenderThread::~RenderThread()
         else
         {
             _hThread = hThread;
+
+            // SetThreadDescription only works on 1607 and higher. If we cannot find it,
+            // then it's no big deal. Just skip setting the description.
+            auto func = GetProcAddressByFunctionDeclaration(GetModuleHandleW(L"kernel32.dll"), SetThreadDescription);
+            if (func)
+            {
+                LOG_IF_FAILED(func(hThread, L"Rendering Output Thread"));
+            }
         }
     }
 
@@ -141,7 +153,7 @@ RenderThread::~RenderThread()
 
 DWORD WINAPI RenderThread::s_ThreadProc(_In_ LPVOID lpParameter)
 {
-    RenderThread* const pContext = static_cast<RenderThread*>(lpParameter);
+    const auto pContext = static_cast<RenderThread*>(lpParameter);
 
     if (pContext != nullptr)
     {
@@ -158,35 +170,78 @@ DWORD WINAPI RenderThread::_ThreadProc()
     while (_fKeepRunning)
     {
         WaitForSingleObject(_hPaintEnabledEvent, INFINITE);
-        WaitForSingleObject(_hEvent, INFINITE);
+
+        if (!_fNextFrameRequested.exchange(false, std::memory_order_acq_rel))
+        {
+            // <--
+            // If `NotifyPaint` is called at this point, then it will not
+            // set the event because `_fWaiting` is not `true` yet so we have
+            // to check again below.
+
+            _fWaiting.store(true, std::memory_order_release);
+
+            // check again now (see comment above)
+            if (!_fNextFrameRequested.exchange(false, std::memory_order_acq_rel))
+            {
+                // Wait until a next frame is requested.
+                WaitForSingleObject(_hEvent, INFINITE);
+            }
+
+            // <--
+            // If `NotifyPaint` is called at this point, then it _will_ set
+            // the event because `_fWaiting` is `true`, but we're not waiting
+            // anymore!
+            // This can probably happen quite often: imagine a scenario where
+            // we are waiting, and the terminal calls `NotifyPaint` twice
+            // very quickly.
+            // In that case, both calls might end up calling `SetEvent`. The
+            // first one will resume this thread and the second one will
+            // `SetEvent` the event. So the next time we wait, the event will
+            // already be set and we won't actually wait.
+            // Because it can happen often, and because rendering is an
+            // expensive operation, we should reset the event to not render
+            // again if nothing changed.
+
+            _fWaiting.store(false, std::memory_order_release);
+
+            // see comment above
+            ResetEvent(_hEvent);
+        }
 
         ResetEvent(_hPaintCompletedEvent);
 
+        _pRenderer->WaitUntilCanRender();
         LOG_IF_FAILED(_pRenderer->PaintFrame());
 
         SetEvent(_hPaintCompletedEvent);
-
-        // extra check before we sleep since it's a "long" activity, relatively speaking.
-        if (_fKeepRunning)
-        {
-            Sleep(s_FrameLimitMilliseconds);
-        }
     }
 
     return S_OK;
 }
 
-void RenderThread::NotifyPaint()
+void RenderThread::NotifyPaint() noexcept
 {
-    SetEvent(_hEvent);
+    if (_fWaiting.load(std::memory_order_acquire))
+    {
+        SetEvent(_hEvent);
+    }
+    else
+    {
+        _fNextFrameRequested.store(true, std::memory_order_release);
+    }
 }
 
-void RenderThread::EnablePainting()
+void RenderThread::EnablePainting() noexcept
 {
     SetEvent(_hPaintEnabledEvent);
 }
 
-void RenderThread::WaitForPaintCompletionAndDisable(const DWORD dwTimeoutMs)
+void RenderThread::DisablePainting() noexcept
+{
+    ResetEvent(_hPaintEnabledEvent);
+}
+
+void RenderThread::WaitForPaintCompletionAndDisable(const DWORD dwTimeoutMs) noexcept
 {
     // When rendering takes place via DirectX, and a console application
     // currently owns the screen, and a new console application is launched (or
@@ -200,7 +255,7 @@ void RenderThread::WaitForPaintCompletionAndDisable(const DWORD dwTimeoutMs)
     // the active application letting it know that it has lost focus;
     // 3.1 ConIoSrv waits for a reply from the client application;
     // 3.2 Meanwhile, the active application receives the focus event and calls
-    // the method this methed, waiting for the current paint operation to
+    // this method, waiting for the current paint operation to
     // finish.
     //
     // This means that the new application is waiting on the connection request

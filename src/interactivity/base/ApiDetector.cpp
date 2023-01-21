@@ -14,7 +14,7 @@ using namespace Microsoft::Console::Interactivity;
 // API Sets
 #define EXT_API_SET_NTUSER_WINDOW L"ext-ms-win-ntuser-window-l1-1-0"
 
-// This may not be defined depending on the SDK version being targetted.
+// This may not be defined depending on the SDK version being targeted.
 #ifndef LOAD_LIBRARY_SEARCH_SYSTEM32_NO_FORWARDER
 #define LOAD_LIBRARY_SEARCH_SYSTEM32_NO_FORWARDER 0x00004000
 #endif
@@ -44,7 +44,7 @@ using namespace Microsoft::Console::Interactivity;
         return STATUS_INVALID_PARAMETER;
     }
 
-    NTSTATUS status = STATUS_SUCCESS;
+    auto status = STATUS_SUCCESS;
     HMODULE hModule = nullptr;
 
     status = TryLoadWellKnownLibrary(lpApiHost, &hModule);
@@ -61,7 +61,7 @@ using namespace Microsoft::Console::Interactivity;
 [[nodiscard]] NTSTATUS ApiDetector::TryLoadWellKnownLibrary(_In_ LPCWSTR lpLibrary,
                                                             _Outptr_result_nullonfailure_ HMODULE* phModule)
 {
-    NTSTATUS status = STATUS_SUCCESS;
+    auto status = STATUS_SUCCESS;
 
     // N.B.: Suppose we attempt to load user32.dll and locate CreateWindowExW
     //       on a Nano Server system with reverse forwarders enabled. Since the
@@ -127,7 +127,7 @@ using namespace Microsoft::Console::Interactivity;
 
 [[nodiscard]] NTSTATUS ApiDetector::TryLocateProcedure(_In_ HMODULE hModule, _In_ LPCSTR lpProcedure)
 {
-    FARPROC proc = GetProcAddress(hModule, lpProcedure);
+    auto proc = GetProcAddress(hModule, lpProcedure);
 
     if (proc)
     {

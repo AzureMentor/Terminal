@@ -5,6 +5,13 @@
 
 #include "telemetry.hpp"
 
+#pragma warning(push)
+#pragma warning(disable : 26494) // _Tlgdata uninitialized from TraceLoggingWrite
+#pragma warning(disable : 26477) // Use nullptr instead of NULL or 0 from TraceLoggingWrite
+#pragma warning(disable : 26485) // _Tlgdata, no array to pointer decay from TraceLoggingWrite
+#pragma warning(disable : 26446) // Prefer gsl::at over unchecked subscript from TraceLoggingLevel
+#pragma warning(disable : 26482) // Only index to arrays with constant expressions from TraceLoggingLevel
+
 TRACELOGGING_DEFINE_PROVIDER(g_hConsoleVirtTermParserEventTraceProvider,
                              "Microsoft.Windows.Console.VirtualTerminal.Parser",
                              // {c9ba2a84-d3ca-5e19-2bd6-776a0910cb9d}
@@ -15,7 +22,7 @@ using namespace Microsoft::Console::VirtualTerminal;
 #pragma warning(push)
 // Disable 4351 so we can initialize the arrays to 0 without a warning.
 #pragma warning(disable : 4351)
-TermTelemetry::TermTelemetry() :
+TermTelemetry::TermTelemetry() noexcept :
     _uiTimesUsedCurrent(0),
     _uiTimesFailedCurrent(0),
     _uiTimesFailedOutsideRangeCurrent(0),
@@ -34,8 +41,12 @@ TermTelemetry::TermTelemetry() :
 
 TermTelemetry::~TermTelemetry()
 {
-    WriteFinalTraceLog();
-    TraceLoggingUnregister(g_hConsoleVirtTermParserEventTraceProvider);
+    try
+    {
+        WriteFinalTraceLog();
+        TraceLoggingUnregister(g_hConsoleVirtTermParserEventTraceProvider);
+    }
+    CATCH_LOG()
 }
 
 // Routine Description:
@@ -45,7 +56,7 @@ TermTelemetry::~TermTelemetry()
 // - code - VT100 code.
 // Return Value:
 // - <none>
-void TermTelemetry::Log(const Codes code)
+void TermTelemetry::Log(const Codes code) noexcept
 {
     // Initially we wanted to pass over a string (ex. "CUU") and use a dictionary data type to hold the counts.
     // However we would have to search through the dictionary every time we called this method, so we decided
@@ -63,7 +74,7 @@ void TermTelemetry::Log(const Codes code)
 // - code - VT100 code.
 // Return Value:
 // - <none>
-void TermTelemetry::LogFailed(const wchar_t wch)
+void TermTelemetry::LogFailed(const wchar_t wch) noexcept
 {
     if (wch > CHAR_MAX)
     {
@@ -85,11 +96,11 @@ void TermTelemetry::LogFailed(const wchar_t wch)
 // - <none>
 // Return Value:
 // - total number.
-unsigned int TermTelemetry::GetAndResetTimesUsedCurrent()
+unsigned int TermTelemetry::GetAndResetTimesUsedCurrent() noexcept
 {
-    unsigned int uiTemp = _uiTimesUsedCurrent;
+    const auto temp = _uiTimesUsedCurrent;
     _uiTimesUsedCurrent = 0;
-    return uiTemp;
+    return temp;
 }
 
 // Routine Description:
@@ -99,11 +110,11 @@ unsigned int TermTelemetry::GetAndResetTimesUsedCurrent()
 // - <none>
 // Return Value:
 // - total number.
-unsigned int TermTelemetry::GetAndResetTimesFailedCurrent()
+unsigned int TermTelemetry::GetAndResetTimesFailedCurrent() noexcept
 {
-    unsigned int uiTemp = _uiTimesFailedCurrent;
+    const auto temp = _uiTimesFailedCurrent;
     _uiTimesFailedCurrent = 0;
-    return uiTemp;
+    return temp;
 }
 
 // Routine Description:
@@ -113,11 +124,11 @@ unsigned int TermTelemetry::GetAndResetTimesFailedCurrent()
 // - <none>
 // Return Value:
 // - total number.
-unsigned int TermTelemetry::GetAndResetTimesFailedOutsideRangeCurrent()
+unsigned int TermTelemetry::GetAndResetTimesFailedOutsideRangeCurrent() noexcept
 {
-    unsigned int uiTemp = _uiTimesFailedOutsideRangeCurrent;
+    const auto temp = _uiTimesFailedOutsideRangeCurrent;
     _uiTimesFailedOutsideRangeCurrent = 0;
-    return uiTemp;
+    return temp;
 }
 
 // Routine Description:
@@ -128,7 +139,7 @@ unsigned int TermTelemetry::GetAndResetTimesFailedOutsideRangeCurrent()
 // - writeLog - true if we should write the log.
 // Return Value:
 // - <none>
-void TermTelemetry::SetShouldWriteFinalLog(const bool writeLog)
+void TermTelemetry::SetShouldWriteFinalLog(const bool writeLog) noexcept
 {
     _fShouldWriteFinalLog = writeLog;
 }
@@ -140,7 +151,7 @@ void TermTelemetry::SetShouldWriteFinalLog(const bool writeLog)
 // - activityId - Pointer to Guid to set our activity Id to.
 // Return Value:
 // - <none>
-void TermTelemetry::SetActivityId(const GUID* activityId)
+void TermTelemetry::SetActivityId(const GUID* activityId) noexcept
 {
     _activityId = *activityId;
 }
@@ -158,11 +169,11 @@ void TermTelemetry::WriteFinalTraceLog() const
     if (_fShouldWriteFinalLog)
     {
         // Determine if we've logged any VT100 sequences at all.
-        bool fLoggedSequence = (_uiTimesFailedOutsideRange > 0);
+        auto fLoggedSequence = (_uiTimesFailedOutsideRange > 0);
 
         if (!fLoggedSequence)
         {
-            for (int n = 0; n < ARRAYSIZE(_uiTimesUsed); n++)
+            for (auto n = 0; n < ARRAYSIZE(_uiTimesUsed); n++)
             {
                 if (_uiTimesUsed[n] > 0)
                 {
@@ -174,7 +185,7 @@ void TermTelemetry::WriteFinalTraceLog() const
 
         if (!fLoggedSequence)
         {
-            for (int n = 0; n < ARRAYSIZE(_uiTimesFailed); n++)
+            for (auto n = 0; n < ARRAYSIZE(_uiTimesFailed); n++)
             {
                 if (_uiTimesFailed[n] > 0)
                 {
@@ -204,17 +215,26 @@ void TermTelemetry::WriteFinalTraceLog() const
                                       TraceLoggingUInt32(_uiTimesUsed[CHA], "CHA"),
                                       TraceLoggingUInt32(_uiTimesUsed[CUP], "CUP"),
                                       TraceLoggingUInt32(_uiTimesUsed[ED], "ED"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECSED], "DECSED"),
                                       TraceLoggingUInt32(_uiTimesUsed[EL], "EL"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECSEL], "DECSEL"),
                                       TraceLoggingUInt32(_uiTimesUsed[SGR], "SGR"),
                                       TraceLoggingUInt32(_uiTimesUsed[DECSC], "DECSC"),
                                       TraceLoggingUInt32(_uiTimesUsed[DECRC], "DECRC"),
+                                      TraceLoggingUInt32(_uiTimesUsed[SM], "SM"),
                                       TraceLoggingUInt32(_uiTimesUsed[DECSET], "DECSET"),
+                                      TraceLoggingUInt32(_uiTimesUsed[RM], "RM"),
                                       TraceLoggingUInt32(_uiTimesUsed[DECRST], "DECRST"),
                                       TraceLoggingUInt32(_uiTimesUsed[DECKPAM], "DECKPAM"),
                                       TraceLoggingUInt32(_uiTimesUsed[DECKPNM], "DECKPNM"),
                                       TraceLoggingUInt32(_uiTimesUsed[DSR], "DSR"),
                                       TraceLoggingUInt32(_uiTimesUsed[DA], "DA"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DA2], "DA2"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DA3], "DA3"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECREQTPARM], "DECREQTPARM"),
                                       TraceLoggingUInt32(_uiTimesUsed[VPA], "VPA"),
+                                      TraceLoggingUInt32(_uiTimesUsed[HPR], "HPR"),
+                                      TraceLoggingUInt32(_uiTimesUsed[VPR], "VPR"),
                                       TraceLoggingUInt32(_uiTimesUsed[ICH], "ICH"),
                                       TraceLoggingUInt32(_uiTimesUsed[DCH], "DCH"),
                                       TraceLoggingUInt32(_uiTimesUsed[IL], "IL"),
@@ -224,6 +244,8 @@ void TermTelemetry::WriteFinalTraceLog() const
                                       TraceLoggingUInt32(_uiTimesUsed[ANSISYSSC], "ANSISYSSC"),
                                       TraceLoggingUInt32(_uiTimesUsed[ANSISYSRC], "ANSISYSRC"),
                                       TraceLoggingUInt32(_uiTimesUsed[DECSTBM], "DECSTBM"),
+                                      TraceLoggingUInt32(_uiTimesUsed[NEL], "NEL"),
+                                      TraceLoggingUInt32(_uiTimesUsed[IND], "IND"),
                                       TraceLoggingUInt32(_uiTimesUsed[RI], "RI"),
                                       TraceLoggingUInt32(_uiTimesUsed[OSCWT], "OscWindowTitle"),
                                       TraceLoggingUInt32(_uiTimesUsed[HTS], "HTS"),
@@ -235,19 +257,49 @@ void TermTelemetry::WriteFinalTraceLog() const
                                       TraceLoggingUInt32(_uiTimesUsed[DesignateG1], "DesignateG1"),
                                       TraceLoggingUInt32(_uiTimesUsed[DesignateG2], "DesignateG2"),
                                       TraceLoggingUInt32(_uiTimesUsed[DesignateG3], "DesignateG3"),
+                                      TraceLoggingUInt32(_uiTimesUsed[LS2], "LS2"),
+                                      TraceLoggingUInt32(_uiTimesUsed[LS3], "LS3"),
+                                      TraceLoggingUInt32(_uiTimesUsed[LS1R], "LS1R"),
+                                      TraceLoggingUInt32(_uiTimesUsed[LS2R], "LS2R"),
+                                      TraceLoggingUInt32(_uiTimesUsed[LS3R], "LS3R"),
+                                      TraceLoggingUInt32(_uiTimesUsed[SS2], "SS2"),
+                                      TraceLoggingUInt32(_uiTimesUsed[SS3], "SS3"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DOCS], "DOCS"),
                                       TraceLoggingUInt32(_uiTimesUsed[HVP], "HVP"),
                                       TraceLoggingUInt32(_uiTimesUsed[DECSTR], "DECSTR"),
                                       TraceLoggingUInt32(_uiTimesUsed[RIS], "RIS"),
                                       TraceLoggingUInt32(_uiTimesUsed[DECSCUSR], "DECSCUSR"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECSCA], "DECSCA"),
                                       TraceLoggingUInt32(_uiTimesUsed[DTTERM_WM], "DTTERM_WM"),
                                       TraceLoggingUInt32(_uiTimesUsed[OSCCT], "OscColorTable"),
                                       TraceLoggingUInt32(_uiTimesUsed[OSCSCC], "OscSetCursorColor"),
                                       TraceLoggingUInt32(_uiTimesUsed[OSCRCC], "OscResetCursorColor"),
                                       TraceLoggingUInt32(_uiTimesUsed[OSCFG], "OscForegroundColor"),
                                       TraceLoggingUInt32(_uiTimesUsed[OSCBG], "OscBackgroundColor"),
+                                      TraceLoggingUInt32(_uiTimesUsed[OSCSCB], "OscSetClipboard"),
                                       TraceLoggingUInt32(_uiTimesUsed[REP], "REP"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECAC1], "DECAC1"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECSWL], "DECSWL"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECDWL], "DECDWL"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECDHL], "DECDHL"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECALN], "DECALN"),
+                                      TraceLoggingUInt32(_uiTimesUsed[XTPUSHSGR], "XTPUSHSGR"),
+                                      TraceLoggingUInt32(_uiTimesUsed[XTPOPSGR], "XTPOPSGR"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECRQM], "DECRQM"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECCARA], "DECCARA"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECRARA], "DECRARA"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECCRA], "DECCRA"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECFRA], "DECFRA"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECERA], "DECERA"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECSERA], "DECSERA"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECSACE], "DECSACE"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECINVM], "DECINVM"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECAC], "DECAC"),
+                                      TraceLoggingUInt32(_uiTimesUsed[DECPS], "DECPS"),
                                       TraceLoggingUInt32Array(_uiTimesFailed, ARRAYSIZE(_uiTimesFailed), "Failed"),
                                       TraceLoggingUInt32(_uiTimesFailedOutsideRange, "FailedOutsideRange"));
         }
     }
 }
+
+#pragma warning(pop)

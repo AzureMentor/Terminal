@@ -14,153 +14,73 @@ Author:
 
 #pragma once
 
-#include "..\terminal\adapter\adaptDefaults.hpp"
-#include "..\types\inc\IInputEvent.hpp"
-#include "..\inc\conattrs.hpp"
+#include "../terminal/adapter/ITerminalApi.hpp"
+#include "../types/inc/IInputEvent.hpp"
+#include "../inc/conattrs.hpp"
 #include "IIoProvider.hpp"
-
-class SCREEN_INFORMATION;
-
-// The WriteBuffer class provides helpers for writing text into the TextBuffer that is backing a particular console screen buffer.
-class WriteBuffer : public Microsoft::Console::VirtualTerminal::AdaptDefaults
-{
-public:
-    WriteBuffer(_In_ Microsoft::Console::IIoProvider& io);
-
-    // Implement Adapter callbacks for default cases (non-escape sequences)
-    void Print(const wchar_t wch) override;
-    void PrintString(const wchar_t* const rgwch, const size_t cch) override;
-    void Execute(const wchar_t wch) override;
-
-    [[nodiscard]] NTSTATUS GetResult() { return _ntstatus; };
-
-private:
-    void _DefaultCase(const wchar_t wch);
-    void _DefaultStringCase(_In_reads_(cch) const wchar_t* const rgwch, const size_t cch);
-
-    Microsoft::Console::IIoProvider& _io;
-    NTSTATUS _ntstatus;
-};
-
-#include "..\terminal\adapter\conGetSet.hpp"
 
 // The ConhostInternalGetSet is for the Conhost process to call the entrypoints for its own Get/Set APIs.
 // Normally, these APIs are accessible from the outside of the conhost process (like by the process being "hosted") through
 // the kernelbase/32 exposed public APIs and routed by the console driver (condrv) to this console host.
 // But since we're trying to call them from *inside* the console host itself, we need to get in the way and route them straight to the
 // v-table inside this process instance.
-class ConhostInternalGetSet final : public Microsoft::Console::VirtualTerminal::ConGetSet
+class ConhostInternalGetSet final : public Microsoft::Console::VirtualTerminal::ITerminalApi
 {
 public:
     ConhostInternalGetSet(_In_ Microsoft::Console::IIoProvider& io);
 
-    BOOL GetConsoleScreenBufferInfoEx(_Out_ CONSOLE_SCREEN_BUFFER_INFOEX* const pConsoleScreenBufferInfoEx) const override;
-    BOOL SetConsoleScreenBufferInfoEx(const CONSOLE_SCREEN_BUFFER_INFOEX* const pConsoleScreenBufferInfoEx) override;
+    void ReturnResponse(const std::wstring_view response) override;
 
-    BOOL SetConsoleCursorPosition(const COORD coordCursorPosition) override;
+    Microsoft::Console::VirtualTerminal::StateMachine& GetStateMachine() override;
+    TextBuffer& GetTextBuffer() override;
+    til::rect GetViewport() const override;
+    void SetViewportPosition(const til::point position) override;
 
-    BOOL GetConsoleCursorInfo(_In_ CONSOLE_CURSOR_INFO* const pConsoleCursorInfo) const override;
-    BOOL SetConsoleCursorInfo(const CONSOLE_CURSOR_INFO* const pConsoleCursorInfo) override;
+    void SetTextAttributes(const TextAttribute& attrs) override;
 
-    BOOL SetConsoleTextAttribute(const WORD wAttr) override;
+    void SetAutoWrapMode(const bool wrapAtEOL) override;
+    bool GetAutoWrapMode() const override;
 
-    BOOL PrivateSetLegacyAttributes(const WORD wAttr,
-                                    const bool fForeground,
-                                    const bool fBackground,
-                                    const bool fMeta) override;
+    void SetScrollingRegion(const til::inclusive_rect& scrollMargins) override;
 
-    BOOL PrivateSetDefaultAttributes(const bool fForeground,
-                                     const bool fBackground) override;
+    void WarningBell() override;
 
-    BOOL SetConsoleXtermTextAttribute(const int iXtermTableEntry,
-                                      const bool fIsForeground) override;
+    bool GetLineFeedMode() const override;
+    void LineFeed(const bool withReturn, const bool wrapForced) override;
 
-    BOOL SetConsoleRGBTextAttribute(const COLORREF rgbColor,
-                                    const bool fIsForeground) override;
+    void SetWindowTitle(const std::wstring_view title) override;
 
-    BOOL PrivateBoldText(const bool bolded) override;
-    BOOL PrivateGetExtendedTextAttributes(ExtendedAttributes* const pAttrs) override;
-    BOOL PrivateSetExtendedTextAttributes(const ExtendedAttributes attrs) override;
-    BOOL PrivateGetTextAttributes(TextAttribute* const pAttrs) const override;
-    BOOL PrivateSetTextAttributes(const TextAttribute& attrs) override;
+    void UseAlternateScreenBuffer() override;
 
-    BOOL PrivateWriteConsoleInputW(_Inout_ std::deque<std::unique_ptr<IInputEvent>>& events,
-                                   _Out_ size_t& eventsWritten) override;
+    void UseMainScreenBuffer() override;
 
-    BOOL SetConsoleWindowInfo(BOOL const bAbsolute,
-                              const SMALL_RECT* const lpConsoleWindow) override;
+    CursorType GetUserDefaultCursorStyle() const override;
 
-    BOOL PrivateSetCursorKeysMode(const bool fApplicationMode) override;
-    BOOL PrivateSetKeypadMode(const bool fApplicationMode) override;
+    void ShowWindow(bool showOrHide) override;
 
-    BOOL PrivateShowCursor(const bool show) noexcept override;
-    BOOL PrivateAllowCursorBlinking(const bool fEnable) override;
+    bool ResizeWindow(const til::CoordType width, const til::CoordType height) override;
 
-    BOOL PrivateSetScrollingRegion(const SMALL_RECT* const srScrollMargins) override;
+    void SetConsoleOutputCP(const unsigned int codepage) override;
+    unsigned int GetConsoleOutputCP() const override;
 
-    BOOL PrivateReverseLineFeed() override;
+    void SetBracketedPasteMode(const bool enabled) override;
+    std::optional<bool> GetBracketedPasteMode() const override;
+    void CopyToClipboard(const std::wstring_view content) override;
+    void SetTaskbarProgress(const ::Microsoft::Console::VirtualTerminal::DispatchTypes::TaskbarState state, const size_t progress) override;
+    void SetWorkingDirectory(const std::wstring_view uri) override;
+    void PlayMidiNote(const int noteNumber, const int velocity, const std::chrono::microseconds duration) override;
 
-    BOOL MoveCursorVertically(const short lines) override;
+    bool IsConsolePty() const override;
+    bool IsVtInputEnabled() const override;
 
-    BOOL SetConsoleTitleW(const std::wstring_view title) override;
+    void NotifyAccessibilityChange(const til::rect& changedRect) override;
 
-    BOOL PrivateUseAlternateScreenBuffer() override;
-
-    BOOL PrivateUseMainScreenBuffer() override;
-
-    BOOL PrivateHorizontalTabSet();
-    BOOL PrivateForwardTab(const SHORT sNumTabs) override;
-    BOOL PrivateBackwardsTab(const SHORT sNumTabs) override;
-    BOOL PrivateTabClear(const bool fClearAll) override;
-    BOOL PrivateSetDefaultTabStops() override;
-
-    BOOL PrivateEnableVT200MouseMode(const bool fEnabled) override;
-    BOOL PrivateEnableUTF8ExtendedMouseMode(const bool fEnabled) override;
-    BOOL PrivateEnableSGRExtendedMouseMode(const bool fEnabled) override;
-    BOOL PrivateEnableButtonEventMouseMode(const bool fEnabled) override;
-    BOOL PrivateEnableAnyEventMouseMode(const bool fEnabled) override;
-    BOOL PrivateEnableAlternateScroll(const bool fEnabled) override;
-    BOOL PrivateEraseAll() override;
-
-    BOOL PrivateGetConsoleScreenBufferAttributes(_Out_ WORD* const pwAttributes) override;
-
-    BOOL PrivatePrependConsoleInput(_Inout_ std::deque<std::unique_ptr<IInputEvent>>& events,
-                                    _Out_ size_t& eventsWritten) override;
-
-    BOOL SetCursorStyle(CursorType const cursorType) override;
-    BOOL SetCursorColor(COLORREF const cursorColor) override;
-
-    BOOL PrivateRefreshWindow() override;
-
-    BOOL PrivateSuppressResizeRepaint() override;
-
-    BOOL PrivateWriteConsoleControlInput(_In_ KeyEvent key) override;
-
-    BOOL GetConsoleOutputCP(_Out_ unsigned int* const puiOutputCP) override;
-
-    BOOL IsConsolePty(_Out_ bool* const pIsPty) const override;
-
-    BOOL DeleteLines(const unsigned int count) override;
-    BOOL InsertLines(const unsigned int count) override;
-
-    BOOL MoveToBottom() const override;
-
-    BOOL PrivateSetColorTableEntry(const short index, const COLORREF value) const noexcept override;
-
-    BOOL PrivateSetDefaultForeground(const COLORREF value) const noexcept override;
-
-    BOOL PrivateSetDefaultBackground(const COLORREF value) const noexcept override;
-
-    BOOL PrivateFillRegion(const COORD startPosition,
-                           const size_t fillLength,
-                           const wchar_t fillChar,
-                           const bool standardFillAttrs) noexcept override;
-
-    BOOL PrivateScrollRegion(const SMALL_RECT scrollRect,
-                             const std::optional<SMALL_RECT> clipRect,
-                             const COORD destinationOrigin,
-                             const bool standardFillAttrs) noexcept override;
+    void MarkPrompt(const Microsoft::Console::VirtualTerminal::DispatchTypes::ScrollMark& mark) override;
+    void MarkCommandStart() override;
+    void MarkOutputStart() override;
+    void MarkCommandFinish(std::optional<unsigned int> error) override;
 
 private:
     Microsoft::Console::IIoProvider& _io;
+    bool _bracketedPasteMode{ false };
 };

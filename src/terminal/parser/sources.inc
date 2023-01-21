@@ -14,7 +14,7 @@
 # Preprocessor Settings
 # -------------------------------------
 
-C_DEFINES               = $(C_DEFINES) -DBUILD_ONECORE_INTERACTIVITY
+C_DEFINES               = $(C_DEFINES)
 
 # -------------------------------------
 # Build System Settings
@@ -35,6 +35,7 @@ SOURCES = \
     ..\OutputStateMachineEngine.cpp \
     ..\telemetry.cpp \
     ..\tracing.cpp \
+    ..\base64.cpp \
 
 INCLUDES = \
     $(INCLUDES); \

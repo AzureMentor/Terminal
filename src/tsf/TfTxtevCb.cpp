@@ -21,7 +21,7 @@ Notes:
 
 #include "precomp.h"
 #include "ConsoleTSF.h"
-#include "TfEditses.h"
+#include "TfEditSession.h"
 
 //+---------------------------------------------------------------------------
 //
@@ -48,7 +48,7 @@ BOOL CConsoleTSF::_HasCompositionChanged(ITfContext* pInputContext, TfEditCookie
     wil::com_ptr_nothrow<ITfRange> FoundRange;
     wil::com_ptr_nothrow<ITfProperty> PropertyTrackComposition;
 
-    BOOL bFound = FALSE;
+    auto bFound = FALSE;
 
     if (SUCCEEDED(pInputContext->GetProperty(GUID_PROP_CONIME_TRACKCOMPOSITION, &Property)))
     {
@@ -59,7 +59,7 @@ BOOL CConsoleTSF::_HasCompositionChanged(ITfContext* pInputContext, TfEditCookie
             HRESULT hr;
             wil::com_ptr_nothrow<ITfRange> range;
 
-            while ((hr = EnumFindFirstTrackCompRange->Next(1, &range, NULL)) == S_OK)
+            while ((hr = EnumFindFirstTrackCompRange->Next(1, &range, nullptr)) == S_OK)
             {
                 VARIANT var;
                 VariantInit(&var);
@@ -94,7 +94,7 @@ BOOL CConsoleTSF::_HasCompositionChanged(ITfContext* pInputContext, TfEditCookie
         return TRUE;
     }
 
-    if (FoundRange == NULL)
+    if (FoundRange == nullptr)
     {
         return FALSE;
     }
@@ -117,7 +117,7 @@ BOOL CConsoleTSF::_HasCompositionChanged(ITfContext* pInputContext, TfEditCookie
             {
                 //
                 // if the start position of the track composition range is not
-                // the beggining of IC,
+                // the beginning of IC,
                 // the composition has been changed since we put it.
                 //
                 if (lResult != 0)
@@ -128,7 +128,7 @@ BOOL CConsoleTSF::_HasCompositionChanged(ITfContext* pInputContext, TfEditCookie
                 {
                     //
                     // if the start position of the track composition range is not
-                    // the beggining of IC,
+                    // the beginning of IC,
                     // the composition has been changed since we put it.
                     //
                     //
@@ -149,7 +149,7 @@ BOOL CConsoleTSF::_HasCompositionChanged(ITfContext* pInputContext, TfEditCookie
                         HRESULT hr;
                         wil::com_ptr_nothrow<ITfRange> range;
 
-                        while ((hr = EnumPropertyChanged->Next(1, &range, NULL)) == S_OK)
+                        while ((hr = EnumPropertyChanged->Next(1, &range, nullptr)) == S_OK)
                         {
                             BOOL empty;
                             if (range->IsEmpty(ecReadOnly, &empty) == S_OK && empty)

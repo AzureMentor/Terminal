@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 using System;
@@ -13,14 +13,14 @@ namespace VTApp
 {
     class Program
     {
-        static string CSI = ((char)0x1b)+"[";
+        static string CSI = ((char)0x1b) + "[";
         static void Main(string[] args)
         {
             Console.WindowHeight = 25;
             Console.BufferHeight = 9000;
             Console.WindowWidth = 80;
             Console.BufferWidth = 80;
-            
+
             Console.WriteLine("VT Tester");
 
             while (true)
@@ -236,11 +236,11 @@ namespace VTApp
                         break;
                     case 'e':
                         Console.Write(CSI);
-                        Console.Write("4m");
+                        Console.Write("53m");
                         break;
                     case 'd':
                         Console.Write(CSI);
-                        Console.Write("24m");
+                        Console.Write("55m");
                         break;
                     case 'r':
                         Console.Write(CSI);
@@ -260,7 +260,7 @@ namespace VTApp
                         break;
                     case '9':
                         Console.Write(CSI);
-                        Console.Write("1;37;43;4m");
+                        Console.Write("1;37;43;53m");
                         break;
                     case '(':
                         Console.Write(CSI);
@@ -271,11 +271,11 @@ namespace VTApp
                         Console.Write("49m");
                         break;
                     case '<':
-                       Console.Write('\xD'); // carriage return \r
-                       break;
+                        Console.Write('\xD'); // carriage return \r
+                        break;
                     case '>':
-                       Console.Write('\xA'); // line feed/new line \n
-                       break;
+                        Console.Write('\xA'); // line feed/new line \n
+                        break;
                     case '`':
                         Console.Write("z");
                         break;
@@ -385,7 +385,7 @@ namespace VTApp
                             for (int j = 0; j < 80; j++)
                             {
                                 if (j == 0)
-                                    Console.Write(i%10);
+                                    Console.Write(i % 10);
                                 else
                                     Console.Write("Z");
                             }

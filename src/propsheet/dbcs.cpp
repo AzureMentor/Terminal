@@ -33,9 +33,9 @@ void MakeAltRasterFont(
     DWORD i;
     DWORD Find;
     ULONG FontIndex;
-    COORD FontSize = FontInfo[DefaultFontIndex].Size;
+    auto FontSize = FontInfo[DefaultFontIndex].Size;
     COORD FontDelta;
-    BOOL fDbcsCharSet = IS_ANY_DBCS_CHARSET(CodePageToCharSet(CodePage));
+    auto fDbcsCharSet = IS_ANY_DBCS_CHARSET(CodePageToCharSet(CodePage));
 
     FontIndex = 0;
     Find = (DWORD)-1;
@@ -63,8 +63,7 @@ void MakeAltRasterFont(
 }
 
 [[nodiscard]] NTSTATUS
-    InitializeDbcsMisc(
-        VOID)
+InitializeDbcsMisc(VOID)
 {
     return TrueTypeFontList::s_Initialize();
 }
@@ -124,7 +123,7 @@ BOOL IsDisableBoldTTFont(
     LPTTFONTLIST pTTFontList;
 
     pTTFontList = SearchTTFont(ptszFace, FALSE, 0);
-    if (pTTFontList != NULL)
+    if (pTTFontList != nullptr)
     {
         return pTTFontList->fDisableBold;
     }
@@ -141,7 +140,7 @@ GetAltFaceName(
     LPTTFONTLIST pTTFontList;
 
     pTTFontList = SearchTTFont(ptszFace, FALSE, 0);
-    if (pTTFontList != NULL)
+    if (pTTFontList != nullptr)
     {
         if (wcscmp(ptszFace, pTTFontList->FaceName1) == 0)
         {
@@ -154,12 +153,11 @@ GetAltFaceName(
         }
     }
 
-    return NULL;
+    return nullptr;
 }
 
 [[nodiscard]] NTSTATUS
-    DestroyDbcsMisc(
-        VOID)
+DestroyDbcsMisc(VOID)
 {
     return TrueTypeFontList::s_Destroy();
 }
@@ -223,7 +221,7 @@ int LanguageListCreate(
      * (i will be LB_ERR if no currently selected item).
      */
     lListIndex = (LONG)SendMessage(hWndLanguageCombo, CB_GETCURSEL, 0, 0L);
-    const int iRet = (int)SendMessage(hWndLanguageCombo, CB_GETITEMDATA, lListIndex, 0L);
+    const auto iRet = (int)SendMessage(hWndLanguageCombo, CB_GETITEMDATA, lListIndex, 0L);
 
     EnableWindow(hWndLanguageCombo, g_fEastAsianSystem);
 

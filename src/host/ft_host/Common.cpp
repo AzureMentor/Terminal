@@ -3,10 +3,11 @@
 
 #include "precomp.h"
 
-using WEX::Logging::Log;
+using namespace WEX::Logging;
 using namespace WEX::Common;
 
 HANDLE Common::_hConsole = INVALID_HANDLE_VALUE;
+bool Common::_isV2 = true;
 extern wil::unique_process_information pi;
 
 bool IsConsoleStillRunning()
@@ -148,7 +149,7 @@ BOOL UnadjustWindowRectEx(
 {
     RECT rc;
     SetRectEmpty(&rc);
-    BOOL fRc = AdjustWindowRectEx(&rc, dwStyle, fMenu, dwExStyle);
+    auto fRc = AdjustWindowRectEx(&rc, dwStyle, fMenu, dwExStyle);
     if (fRc)
     {
         prc->left -= rc.left;
@@ -161,7 +162,7 @@ BOOL UnadjustWindowRectEx(
 
 static HANDLE GetStdHandleVerify(const DWORD dwHandleType)
 {
-    const HANDLE hConsole = GetStdHandle(dwHandleType);
+    const auto hConsole = GetStdHandle(dwHandleType);
     VERIFY_ARE_NOT_EQUAL(hConsole, INVALID_HANDLE_VALUE, L"Ensure we got a valid console handle");
     VERIFY_IS_NOT_NULL(hConsole, L"Ensure we got a non-null console handle");
 
@@ -185,9 +186,9 @@ bool Common::TestBufferSetup()
 
     _hConsole = CreateConsoleScreenBuffer(GENERIC_READ | GENERIC_WRITE,
                                           0 /*dwShareMode*/,
-                                          NULL /*lpSecurityAttributes*/,
+                                          nullptr /*lpSecurityAttributes*/,
                                           CONSOLE_TEXTMODE_BUFFER,
-                                          NULL /*lpReserved*/);
+                                          nullptr /*lpReserved*/);
 
     VERIFY_ARE_NOT_EQUAL(_hConsole, INVALID_HANDLE_VALUE, L"Creating our test screen buffer.");
 
@@ -220,7 +221,7 @@ CommonV1V2Helper::CommonV1V2Helper(const ForceV2States ForceV2StateDesired)
         return;
     }
 
-    LSTATUS lstatus = RegOpenKeyExW(HKEY_CURRENT_USER, pwszConsoleKeyName, 0, KEY_READ | KEY_WRITE, &_consoleKey);
+    auto lstatus = RegOpenKeyExW(HKEY_CURRENT_USER, pwszConsoleKeyName, 0, KEY_READ | KEY_WRITE, &_consoleKey);
     if (ERROR_ACCESS_DENIED == lstatus)
     {
         // UAP and some systems won't let us modify the registry. That's OK. Try to run the tests.

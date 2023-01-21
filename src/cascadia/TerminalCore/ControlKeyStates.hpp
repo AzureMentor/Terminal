@@ -3,6 +3,14 @@
 
 #pragma once
 
+// All the modifiers in this file EXCEPT the win key come from
+// https://docs.microsoft.com/en-us/windows/console/key-event-record-str
+//
+// Since we also want to be able to encode win-key info in this structure, we'll
+// add those values manually here
+constexpr DWORD RIGHT_WIN_PRESSED = 0x0200;
+constexpr DWORD LEFT_WIN_PRESSED = 0x0400;
+
 namespace Microsoft::Terminal::Core
 {
     class ControlKeyStates;
@@ -31,6 +39,8 @@ public:
     static constexpr StaticValue ScrolllockOn{ SCROLLLOCK_ON };
     static constexpr StaticValue CapslockOn{ CAPSLOCK_ON };
     static constexpr StaticValue EnhancedKey{ ENHANCED_KEY };
+    static constexpr StaticValue RightWinPressed{ RIGHT_WIN_PRESSED };
+    static constexpr StaticValue LeftWinPressed{ LEFT_WIN_PRESSED };
 
     constexpr ControlKeyStates() noexcept :
         _value(0) {}
@@ -46,6 +56,45 @@ public:
         _value |= rhs.Value();
         return *this;
     }
+
+#ifdef WINRT_Windows_System_H
+    ControlKeyStates(const winrt::Windows::System::VirtualKeyModifiers& modifiers) noexcept :
+        _value{ 0 }
+    {
+        // static_cast to a uint32_t because we can't use the WI_IsFlagSet
+        // macro directly with a VirtualKeyModifiers
+        const auto m = static_cast<uint32_t>(modifiers);
+        _value |= WI_IsFlagSet(m, static_cast<uint32_t>(winrt::Windows::System::VirtualKeyModifiers::Shift)) ?
+                      SHIFT_PRESSED :
+                      0;
+
+        // Since we can't differentiate between the left & right versions of
+        // Ctrl, Alt and Win in a VirtualKeyModifiers
+        _value |= WI_IsFlagSet(m, static_cast<uint32_t>(winrt::Windows::System::VirtualKeyModifiers::Menu)) ?
+                      LEFT_ALT_PRESSED :
+                      0;
+        _value |= WI_IsFlagSet(m, static_cast<uint32_t>(winrt::Windows::System::VirtualKeyModifiers::Control)) ?
+                      LEFT_CTRL_PRESSED :
+                      0;
+        _value |= WI_IsFlagSet(m, static_cast<uint32_t>(winrt::Windows::System::VirtualKeyModifiers::Windows)) ?
+                      LEFT_WIN_PRESSED :
+                      0;
+    }
+#endif
+
+#ifdef WINRT_Microsoft_Terminal_Core_H
+    constexpr ControlKeyStates(const winrt::Microsoft::Terminal::Core::ControlKeyStates& projKeyStates) :
+        ControlKeyStates(projKeyStates.Value)
+    {
+    }
+
+    operator winrt::Microsoft::Terminal::Core::ControlKeyStates() const noexcept
+    {
+        winrt::Microsoft::Terminal::Core::ControlKeyStates ret;
+        ret.Value = _value;
+        return ret;
+    }
+#endif
 
     constexpr DWORD Value() const noexcept
     {
@@ -65,6 +114,11 @@ public:
     constexpr bool IsCtrlPressed() const noexcept
     {
         return IsAnyFlagSet(RightCtrlPressed | LeftCtrlPressed);
+    }
+
+    constexpr bool IsWinPressed() const noexcept
+    {
+        return IsAnyFlagSet(RightWinPressed | LeftWinPressed);
     }
 
     constexpr bool IsAltGrPressed() const noexcept

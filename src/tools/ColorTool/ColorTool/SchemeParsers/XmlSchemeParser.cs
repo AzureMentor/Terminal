@@ -1,10 +1,9 @@
-﻿//
+//
 // Copyright (C) Microsoft.  All rights reserved.
 // Licensed under the terms described in the LICENSE file in the root of this project.
 //
 
 using System;
-using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -38,16 +37,14 @@ namespace ColorTool.SchemeParsers
 
         private const string ForegroundKey = "Foreground Color";
         private const string BackgroundKey = "Background Color";
+        private const string CursorKey = "Cursor Color";
         private const string RedKey = "Red Component";
         private const string GreenKey = "Green Component";
         private const string BlueKey = "Blue Component";
 
-        protected override string FileExtension { get; } = ".itermcolors";
+        public override string FileExtension { get; } = ".itermcolors";
 
         public override string Name { get; } = "iTerm Parser";
-
-        public override bool CanParse(string schemeName) => 
-            string.Equals(Path.GetExtension(schemeName), FileExtension, StringComparison.OrdinalIgnoreCase);
 
         public override ColorScheme ParseScheme(string schemeName, bool reportErrors = false)
         {
@@ -57,7 +54,7 @@ namespace ColorTool.SchemeParsers
             XmlNodeList children = root.ChildNodes;
 
             uint[] colorTable = new uint[ColorTableSize];
-            uint? fgColor = null, bgColor = null;
+            uint? fgColor = null, bgColor = null, cursorColor = null;
             int colorsFound = 0;
             bool success = false;
             foreach (var tableEntry in children.OfType<XmlNode>().Where(_ => _.Name == "key"))
@@ -69,6 +66,7 @@ namespace ColorTool.SchemeParsers
                 if (!success) { break; }
                 else if (tableEntry.InnerText == ForegroundKey) { fgColor = rgb; }
                 else if (tableEntry.InnerText == BackgroundKey) { bgColor = rgb; }
+                else if (tableEntry.InnerText == CursorKey) { cursorColor = rgb; }
                 else if (-1 != (index = Array.IndexOf(PListColorNames, tableEntry.InnerText)))
                 { colorTable[index] = rgb; colorsFound++; }
             }
@@ -85,7 +83,7 @@ namespace ColorTool.SchemeParsers
                 return null;
             }
 
-            var consoleAttributes = new ConsoleAttributes(bgColor, fgColor, null, null);
+            var consoleAttributes = new ConsoleAttributes(bgColor, fgColor, null, null, cursorColor);
             return new ColorScheme(ExtractSchemeName(schemeName), colorTable, consoleAttributes);
         }
 
@@ -126,23 +124,28 @@ namespace ColorTool.SchemeParsers
             return true;
         }
 
-        private XmlDocument LoadXmlScheme(string schemeName)
-        {
-            XmlDocument xmlDoc = new XmlDocument(); // Create an XML document object
-            foreach (string path in SchemeManager.GetSearchPaths(schemeName, FileExtension)
-                                          .Where(File.Exists))
-            {
-                try
+        private XmlDocument LoadXmlScheme(string schemeName) =>
+            SchemeManager
+            .GetSearchPaths(schemeName, FileExtension)
+            .Select(path =>
                 {
-                    xmlDoc.Load(path);
-                    return xmlDoc;
-                }
-                catch (XmlException /*e*/) { /* failed to parse */ }
-                catch (IOException /*e*/) { /* failed to find */ }
-                catch (UnauthorizedAccessException /*e*/) { /* unauthorized */ }
-            }
-
-            return null;
-        }
+                    try
+                    {
+                        var text = File.ReadAllText(path);
+                        var xmlDoc = new XmlDocument();
+                        xmlDoc.LoadXml(text);
+                        return xmlDoc;
+                    }
+                    catch (XmlException) { }
+                    catch (IOException) { }
+                    catch (UnauthorizedAccessException) { }
+                    catch (Exception e)
+                    {
+                        Console.WriteLine($"Unexpected Exception: {e}.\nBailing...");
+                        throw;
+                    }
+                    return null;
+                })
+            .FirstOrDefault(x => x != null);
     }
 }

@@ -32,9 +32,13 @@ public:
     NonClientIslandWindow(const winrt::Windows::UI::Xaml::ElementTheme& requestedTheme) noexcept;
     virtual ~NonClientIslandWindow() override;
 
+    void MakeWindow() noexcept override;
     virtual void OnSize(const UINT width, const UINT height) override;
 
     [[nodiscard]] virtual LRESULT MessageHandler(UINT const message, WPARAM const wparam, LPARAM const lparam) noexcept override;
+
+    virtual til::rect GetNonClientFrame(UINT dpi) const noexcept override;
+    virtual til::size GetTotalNonClientExclusiveSize(UINT dpi) const noexcept override;
 
     void Initialize() override;
 
@@ -43,41 +47,52 @@ public:
     void SetTitlebarContent(winrt::Windows::UI::Xaml::UIElement content);
     void OnApplicationThemeChanged(const winrt::Windows::UI::Xaml::ElementTheme& requestedTheme) override;
 
+    void SetTitlebarBackground(winrt::Windows::UI::Xaml::Media::Brush brush);
+
+    virtual void UseMica(const bool newValue, const double titlebarOpacity) override;
+
 private:
-    std::optional<COORD> _oldIslandPos;
+    std::optional<til::point> _oldIslandPos;
 
     winrt::TerminalApp::TitlebarControl _titlebar{ nullptr };
     winrt::Windows::UI::Xaml::UIElement _clientContent{ nullptr };
 
     wil::unique_hbrush _backgroundBrush;
-    COLORREF _backgroundBrushColor;
+    til::color _backgroundBrushColor;
 
     winrt::Windows::UI::Xaml::Controls::Border _dragBar{ nullptr };
-    wil::unique_hrgn _dragBarRegion;
+    wil::unique_hwnd _dragBarWindow;
 
     winrt::Windows::UI::Xaml::ElementTheme _theme;
 
+    bool _useMica{ false };
+    double _titlebarOpacity{ 1.0 };
+
     bool _isMaximized;
+    bool _trackingMouse{ false };
+
+    [[nodiscard]] static LRESULT __stdcall _StaticInputSinkWndProc(HWND const window, UINT const message, WPARAM const wparam, LPARAM const lparam) noexcept;
+    [[nodiscard]] LRESULT _InputSinkMessageHandler(UINT const message, WPARAM const wparam, LPARAM const lparam) noexcept;
+
+    void _ResizeDragBarWindow() noexcept;
 
     int _GetResizeHandleHeight() const noexcept;
-    RECT _GetDragAreaRect() const noexcept;
+    til::rect _GetDragAreaRect() const noexcept;
     int _GetTopBorderHeight() const noexcept;
+    LRESULT _dragBarNcHitTest(const til::point pointer);
 
-    [[nodiscard]] LRESULT _OnNcCreate(WPARAM wParam, LPARAM lParam) noexcept override;
     [[nodiscard]] LRESULT _OnNcCalcSize(const WPARAM wParam, const LPARAM lParam) noexcept;
     [[nodiscard]] LRESULT _OnNcHitTest(POINT ptMouse) const noexcept;
     [[nodiscard]] LRESULT _OnPaint() noexcept;
+    [[nodiscard]] LRESULT _OnSetCursor(WPARAM wParam, LPARAM lParam) const noexcept;
     void _OnMaximizeChange() noexcept;
-    void _OnDragBarSizeChanged(winrt::Windows::Foundation::IInspectable sender, winrt::Windows::UI::Xaml::SizeChangedEventArgs eventArgs) const;
+    void _OnDragBarSizeChanged(winrt::Windows::Foundation::IInspectable sender, winrt::Windows::UI::Xaml::SizeChangedEventArgs eventArgs);
 
-    void _SetIsFullscreen(const bool fFullscreenEnabled) override;
-    // See IslandWindow::_SetIsFullscreen for details on this method.
-    bool _ShouldUpdateStylesOnFullscreen() const override { return false; };
+    void _SetIsBorderless(const bool borderlessEnabled) override;
+    void _SetIsFullscreen(const bool fullscreenEnabled) override;
     bool _IsTitlebarVisible() const;
 
     void _UpdateFrameMargins() const noexcept;
     void _UpdateMaximizedState();
     void _UpdateIslandPosition(const UINT windowWidth, const UINT windowHeight);
-    void _UpdateIslandRegion() const;
-    void _UpdateFrameTheme() const;
 };

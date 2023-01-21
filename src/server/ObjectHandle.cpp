@@ -5,12 +5,12 @@
 
 #include "ObjectHandle.h"
 
-#include "..\host\globals.h"
-#include "..\host\inputReadHandleData.h"
-#include "..\host\input.h"
-#include "..\host\screenInfo.hpp"
+#include "../host/globals.h"
+#include "../host/inputReadHandleData.h"
+#include "../host/input.h"
+#include "../host/screenInfo.hpp"
 
-#include "..\interactivity\inc\ServiceLocator.hpp"
+#include "../interactivity/inc/ServiceLocator.hpp"
 
 ConsoleHandleData::ConsoleHandleData(const ACCESS_MASK amAccess,
                                      const ULONG ulShareAccess) :
@@ -53,7 +53,7 @@ ConsoleHandleData::~ConsoleHandleData()
 void ConsoleHandleData::Initialize(const ULONG ulHandleType,
                                    PVOID const pvClientPointer)
 {
-    // This can only be used once and it's an erorr if we try to initialize after it's been done.
+    // This can only be used once and it's an error if we try to initialize after it's been done.
     THROW_HR_IF(E_NOT_VALID_STATE, _ulHandleType != HandleType::NotReady);
 
     // We can't be initialized into the "not ready" state. Only constructed that way.
@@ -135,7 +135,7 @@ bool ConsoleHandleData::IsWriteShared() const
 }
 
 // Routine Description:
-// - Retieves the properly typed Input Buffer from the Handle.
+// - Retrieves the properly typed Input Buffer from the Handle.
 // Arguments:
 // - amRequested - Access that the client would like for manipulating the buffer
 // - ppInputBuffer - On success, filled with the referenced Input Buffer object
@@ -155,7 +155,7 @@ bool ConsoleHandleData::IsWriteShared() const
 }
 
 // Routine Description:
-// - Retieves the properly typed Screen Buffer from the Handle.
+// - Retrieves the properly typed Screen Buffer from the Handle.
 // Arguments:
 // - amRequested - Access that the client would like for manipulating the buffer
 // - ppInputBuffer - On success, filled with the referenced Screen Buffer object
@@ -182,10 +182,10 @@ bool ConsoleHandleData::IsWriteShared() const
 // - HRESULT S_OK or E_UNEXPECTED if the handle data structure is in an invalid state.
 [[nodiscard]] HRESULT ConsoleHandleData::GetWaitQueue(_Outptr_ ConsoleWaitQueue** const ppWaitQueue) const
 {
-    CONSOLE_INFORMATION& gci = Microsoft::Console::Interactivity::ServiceLocator::LocateGlobals().getConsoleInformation();
+    auto& gci = Microsoft::Console::Interactivity::ServiceLocator::LocateGlobals().getConsoleInformation();
     if (_IsInput())
     {
-        InputBuffer* const pObj = static_cast<InputBuffer*>(_pvClientPointer);
+        const auto pObj = static_cast<InputBuffer*>(_pvClientPointer);
         *ppWaitQueue = &pObj->WaitQueue;
         return S_OK;
     }
@@ -226,8 +226,8 @@ INPUT_READ_HANDLE_DATA* ConsoleHandleData::GetClientInput() const
 [[nodiscard]] HRESULT ConsoleHandleData::_CloseInputHandle()
 {
     FAIL_FAST_IF(!(_IsInput()));
-    InputBuffer* pInputBuffer = static_cast<InputBuffer*>(_pvClientPointer);
-    INPUT_READ_HANDLE_DATA* pReadHandleData = GetClientInput();
+    auto pInputBuffer = static_cast<InputBuffer*>(_pvClientPointer);
+    auto pReadHandleData = GetClientInput();
     pReadHandleData->CompletePending();
 
     // see if there are any reads waiting for data via this handle.  if
@@ -265,7 +265,7 @@ INPUT_READ_HANDLE_DATA* ConsoleHandleData::GetClientInput() const
 [[nodiscard]] HRESULT ConsoleHandleData::_CloseOutputHandle()
 {
     FAIL_FAST_IF(!(_IsOutput()));
-    SCREEN_INFORMATION* pScreenInfo = static_cast<SCREEN_INFORMATION*>(_pvClientPointer);
+    auto pScreenInfo = static_cast<SCREEN_INFORMATION*>(_pvClientPointer);
 
     pScreenInfo = &pScreenInfo->GetMainBuffer();
 

@@ -21,25 +21,6 @@ Author(s):
 
 #include "../types/inc/Viewport.hpp"
 
-namespace Microsoft::Console::Interactivity::Win32
-{
-    class UiaTextRange;
-
-    namespace UiaTextRangeTracing
-    {
-        enum class ApiCall;
-        struct IApiMsg;
-    }
-
-    class ScreenInfoUiaProvider;
-
-    namespace ScreenInfoUiaProviderTracing
-    {
-        enum class ApiCall;
-        struct IApiMsg;
-    }
-}
-
 #if DBG
 #define DBGCHARS(_params_)              \
     {                                   \
@@ -59,7 +40,7 @@ class Tracing
 public:
     ~Tracing();
 
-    static Tracing s_TraceApiCall(const NTSTATUS& result, PCSTR traceName);
+    static Tracing s_TraceApiCall(const NTSTATUS result, PCSTR traceName);
 
     static void s_TraceApi(const NTSTATUS status, const CONSOLE_GETLARGESTWINDOWSIZE_MSG* const a);
     static void s_TraceApi(const NTSTATUS status, const CONSOLE_SCREENBUFFERINFO_MSG* const a, const bool fSet);
@@ -69,7 +50,7 @@ public:
     static void s_TraceApi(_In_ const void* const buffer, const CONSOLE_WRITECONSOLE_MSG* const a);
 
     static void s_TraceApi(const CONSOLE_SCREENBUFFERINFO_MSG* const a);
-    static void s_TraceApi(const CONSOLE_MODE_MSG* const a, const std::wstring& handleType);
+    static void s_TraceApi(const CONSOLE_MODE_MSG* const a, const std::wstring_view handleType);
     static void s_TraceApi(const CONSOLE_SETTEXTATTRIBUTE_MSG* const a);
     static void s_TraceApi(const CONSOLE_WRITECONSOLEOUTPUTSTRING_MSG* const a);
 
@@ -81,22 +62,10 @@ public:
     static void s_TraceWindowMessage(const MSG& msg);
     static void s_TraceInputRecord(const INPUT_RECORD& inputRecord);
 
+    static void s_TraceCookedRead(_In_ ConsoleProcessHandle* const pConsoleProcessHandle, _In_reads_(cchCookedBufferLength) const wchar_t* pwchCookedBuffer, _In_ ULONG cchCookedBufferLength);
+    static void s_TraceConsoleAttachDetach(_In_ ConsoleProcessHandle* const pConsoleProcessHandle, _In_ bool bIsAttach);
+
     static void __stdcall TraceFailure(const wil::FailureInfo& failure) noexcept;
-
-// TODO GitHub #1914: Re-attach Tracing to UIA Tree
-#if 0
-    static void s_TraceUia(const Microsoft::Console::Interactivity::Win32::UiaTextRange* const range,
-                           const Microsoft::Console::Interactivity::Win32::UiaTextRangeTracing::ApiCall apiCall,
-                           const Microsoft::Console::Interactivity::Win32::UiaTextRangeTracing::IApiMsg* const apiMsg);
-
-    static void s_TraceUia(const Microsoft::Console::Interactivity::Win32::ScreenInfoUiaProvider* const pProvider,
-                           const Microsoft::Console::Interactivity::Win32::ScreenInfoUiaProviderTracing::ApiCall apiCall,
-                           const Microsoft::Console::Interactivity::Win32::ScreenInfoUiaProviderTracing::IApiMsg* const apiMsg);
-
-    static void s_TraceUia(const Microsoft::Console::Types::WindowUiaProvider* const pProvider,
-                           const Microsoft::Console::Types::WindowUiaProviderTracing::ApiCall apiCall,
-                           const Microsoft::Console::Types::WindowUiaProviderTracing::IApiMsg* const apiMsg);
-#endif
 
 private:
     static ULONG s_ulDebugFlag;
@@ -104,9 +73,4 @@ private:
     Tracing(std::function<void()> onExit);
 
     std::function<void()> _onExit;
-
-    static const wchar_t* const _textPatternRangeEndpointToString(int endpoint);
-    static const wchar_t* const _textUnitToString(int unit);
-    static const wchar_t* const _eventIdToString(long eventId);
-    static const wchar_t* const _directionToString(int direction);
 };

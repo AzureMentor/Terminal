@@ -3,15 +3,8 @@
 
 #pragma once
 
-#include "..\types\IConsoleWindow.hpp"
-#include "..\types\WindowUiaProviderBase.hpp"
-
-// Custom window messages
-#define CM_UPDATE_TITLE (WM_USER)
-
+#include "CustomWindowMessages.h"
 #include <wil/resource.h>
-
-using namespace Microsoft::Console::Types;
 
 template<typename T>
 class BaseWindow
@@ -35,7 +28,7 @@ public:
             WINRT_ASSERT(!that->_window);
             that->_window = wil::unique_hwnd(window);
 
-            return that->_OnNcCreate(wparam, lparam);
+            return that->OnNcCreate(wparam, lparam);
         }
         else if (T* that = GetThisFromHandle(window))
         {
@@ -54,24 +47,8 @@ public:
             return HandleDpiChange(_window.get(), wparam, lparam);
         }
 
-            // TODO GitHub #2447: Properly attach WindowUiaProvider for signaling model
-            /*
-        case WM_GETOBJECT:
-        {
-            return HandleGetObject(_window.get(), wparam, lparam);
-        }
-        */
-
         case WM_DESTROY:
         {
-            // TODO GitHub #2447: Properly attach WindowUiaProvider for signaling model
-            /*
-            // signal to uia that they can disconnect our uia provider
-            if (_pUiaProvider)
-            {
-                UiaReturnRawElementProvider(hWnd, 0, 0, NULL);
-            }
-            */
             PostQuitMessage(0);
             return 0;
         }
@@ -124,7 +101,7 @@ public:
     [[nodiscard]] LRESULT HandleDpiChange(const HWND hWnd, const WPARAM wParam, const LPARAM lParam)
     {
         _inDpiChange = true;
-        const HWND hWndStatic = GetWindow(hWnd, GW_CHILD);
+        const auto hWndStatic = GetWindow(hWnd, GW_CHILD);
         if (hWndStatic != nullptr)
         {
             const UINT uDpi = HIWORD(wParam);
@@ -139,22 +116,6 @@ public:
         _inDpiChange = false;
         return 0;
     }
-
-    [[nodiscard]] LRESULT HandleGetObject(const HWND hWnd, const WPARAM wParam, const LPARAM lParam)
-    {
-        LRESULT retVal = 0;
-
-        // If we are receiving a request from Microsoft UI Automation framework, then return the basic UIA COM interface.
-        if (static_cast<long>(lParam) == static_cast<long>(UiaRootObjectId))
-        {
-            retVal = UiaReturnRawElementProvider(hWnd, wParam, lParam, _GetUiaProvider());
-        }
-        // Otherwise, return 0. We don't implement MS Active Accessibility (the other framework that calls WM_GETOBJECT).
-
-        return retVal;
-    }
-
-    virtual IRawElementProviderSimple* _GetUiaProvider() = 0;
 
     virtual void OnResize(const UINT width, const UINT height) = 0;
     virtual void OnMinimize() = 0;
@@ -172,6 +133,11 @@ public:
         return _window.get();
     }
 
+    UINT GetCurrentDpi() const noexcept
+    {
+        return ::GetDpiForWindow(_window.get());
+    }
+
     float GetCurrentDpiScale() const noexcept
     {
         const auto dpi = ::GetDpiForWindow(_window.get());
@@ -180,31 +146,31 @@ public:
     }
 
     //// Gets the physical size of the client area of the HWND in _window
-    SIZE GetPhysicalSize() const noexcept
+    til::size GetPhysicalSize() const noexcept
     {
         RECT rect = {};
         GetClientRect(_window.get(), &rect);
         const auto windowsWidth = rect.right - rect.left;
         const auto windowsHeight = rect.bottom - rect.top;
-        return SIZE{ windowsWidth, windowsHeight };
+        return { windowsWidth, windowsHeight };
     }
 
     //// Gets the logical (in DIPs) size of a physical size specified by the parameter physicalSize
     //// Remarks:
-    //// XAML coordinate system is always in Display Indepenent Pixels (a.k.a DIPs or Logical). However Win32 GDI (because of legacy reasons)
+    //// XAML coordinate system is always in Display Independent Pixels (a.k.a DIPs or Logical). However Win32 GDI (because of legacy reasons)
     //// in DPI mode "Per-Monitor and Per-Monitor (V2) DPI Awareness" is always in physical pixels.
     //// The formula to transform is:
     ////     logical = (physical / dpi) + 0.5 // 0.5 is to ensure that we pixel snap correctly at the edges, this is necessary with odd DPIs like 1.25, 1.5, 1, .75
     //// See also:
     ////   https://docs.microsoft.com/en-us/windows/desktop/LearnWin32/dpi-and-device-independent-pixels
     ////   https://docs.microsoft.com/en-us/windows/desktop/hidpi/high-dpi-desktop-application-development-on-windows#per-monitor-and-per-monitor-v2-dpi-awareness
-    winrt::Windows::Foundation::Size GetLogicalSize(const SIZE physicalSize) const noexcept
+    winrt::Windows::Foundation::Size GetLogicalSize(const til::size physicalSize) const noexcept
     {
         const auto scale = GetCurrentDpiScale();
         // 0.5 is to ensure that we pixel snap correctly at the edges, this is necessary with odd DPIs like 1.25, 1.5, 1, .75
-        const auto logicalWidth = (physicalSize.cx / scale) + 0.5f;
-        const auto logicalHeigth = (physicalSize.cy / scale) + 0.5f;
-        return winrt::Windows::Foundation::Size(logicalWidth, logicalHeigth);
+        const auto logicalWidth = (physicalSize.width / scale) + 0.5f;
+        const auto logicalHeight = (physicalSize.height / scale) + 0.5f;
+        return winrt::Windows::Foundation::Size(logicalWidth, logicalHeight);
     }
 
     winrt::Windows::Foundation::Size GetLogicalSize() const noexcept
@@ -248,7 +214,7 @@ protected:
     // - This method is called when the window receives the WM_NCCREATE message.
     // Return Value:
     // - The value returned from the window proc.
-    virtual [[nodiscard]] LRESULT _OnNcCreate(WPARAM wParam, LPARAM lParam) noexcept
+    virtual [[nodiscard]] LRESULT OnNcCreate(WPARAM wParam, LPARAM lParam) noexcept
     {
         SetWindowLongPtr(_window.get(), GWLP_USERDATA, reinterpret_cast<LONG_PTR>(this));
 

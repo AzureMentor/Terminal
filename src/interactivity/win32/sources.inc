@@ -12,7 +12,7 @@
 # Preprocessor Settings
 # -------------------------------------
 
-C_DEFINES               = $(C_DEFINES) -DFE_SB
+C_DEFINES               = $(C_DEFINES) -DFE_SB -D__INSIDE_WINDOWS
 
 # -------------------------------------
 # Compiler Settings
@@ -28,7 +28,6 @@ MSC_WARNING_LEVEL       = $(MSC_WARNING_LEVEL) /wd4201
 # Code in the OneCore depot automatically excludes default Win32 libraries.
 
 # Defines IME and Codepage support
-W32_SB                  = 1
 
 # -------------------------------------
 # Sources, Headers, and Libraries
@@ -45,7 +44,6 @@ SOURCES = \
     ..\consoleKeyInfo.cpp \
     ..\find.cpp \
     ..\icon.cpp \
-    ..\InputServices.cpp \
     ..\menu.cpp \
     ..\screenInfoUiaProvider.cpp \
     ..\SystemConfigurationProvider.cpp \
@@ -56,7 +54,6 @@ SOURCES = \
     ..\windowio.cpp \
     ..\WindowMetrics.cpp \
     ..\windowproc.cpp \
-    ..\windowtheme.cpp \
     ..\windowUiaProvider.cpp \
 
 INCLUDES = \

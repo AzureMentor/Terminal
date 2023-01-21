@@ -22,9 +22,9 @@ Author(s):
 
 #include "TermControlAutomationPeer.h"
 #include <UIAutomationCore.h>
-#include "UiaTextRange.hpp"
+#include "../types/TermControlUiaTextRange.hpp"
 
-namespace winrt::Microsoft::Terminal::TerminalControl::implementation
+namespace winrt::Microsoft::Terminal::Control::implementation
 {
     class XamlUiaTextRange :
         public winrt::implements<XamlUiaTextRange, Windows::UI::Xaml::Automation::Provider::ITextRangeProvider>

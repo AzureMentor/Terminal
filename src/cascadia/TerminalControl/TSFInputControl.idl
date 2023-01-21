@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-namespace Microsoft.Terminal.TerminalControl
+namespace Microsoft.Terminal.Control
 {
     delegate void CompositionCompletedEventArgs(String text);
 
@@ -14,6 +14,7 @@ namespace Microsoft.Terminal.TerminalControl
     {
         String FontFace { get; set; };
         Windows.Foundation.Size FontSize { get; set; };
+        Windows.UI.Text.FontWeight FontWeight { get; set; };
     }
 
     [default_interface]
@@ -27,5 +28,9 @@ namespace Microsoft.Terminal.TerminalControl
 
         void NotifyFocusEnter();
         void NotifyFocusLeave();
+        void ClearBuffer();
+        void TryRedrawCanvas();
+
+        void Close();
     }
 }

@@ -33,7 +33,7 @@ Run the test:
     - Run with no arguments to see the order in which processes are signaled.
     - Run `closetest.exe -d alternate --gap -n 4` to require multiple Close
       button clicks.
- - Observe the "closetest: child nnn: attached to console" messages in DbgView
+ - Observe the "closetest: child ###: attached to console" messages in DbgView
  - Click the console's Close button.
  - Observe the `CTRL_CLOSE_EVENT` messages in DbgView.
 DETAILS:
@@ -47,7 +47,7 @@ The test demonstrates how it can be necessary to click the console's Close
 button multiple times to kill all the processes in the console, even though no
 new processes start during the test.
 OBSERVATIONS:
-Aftering closing a console, Windows delivers a CTRL_CLOSE_EVENT event to each
+After closing a console, Windows delivers a CTRL_CLOSE_EVENT event to each
 attached process, giving it 5 seconds to handle it before terminating the
 process.  If a process-to-signal has already died, Windows apparently aborts
 the signaling process, so all the other processes remain.
@@ -193,12 +193,12 @@ EXAMPLE 3: race condition between process cleanup and close signaling
 #endif
 
 #include <windows.h>
-#include <assert.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <wchar.h>
-#include <locale.h>
+#include <cassert>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cwchar>
+#include <clocale>
 
 #include <algorithm>
 #include <array>
@@ -298,7 +298,9 @@ static std::vector<DWORD> getConsoleProcessList()
     const DWORD count1 = GetConsoleProcessList(&ret[0], (DWORD)ret.size());
     assert(count1 >= 1 && "GetConsoleProcessList failed");
     ret.resize(count1);
+#pragma warning(suppress : 4189) // It's used in the assert
     const DWORD count2 = GetConsoleProcessList(&ret[0], (DWORD)ret.size());
+    UNREFERENCED_PARAMETER(count2);
     assert(count1 == count2 && "GetConsoleProcessList failed");
     return ret;
 }
@@ -373,8 +375,9 @@ static void spawnChildTree(DWORD masterPid, const std::vector<std::wstring>& ext
     PROCESS_INFORMATION pi{};
     success = CreateProcessW(exeName().c_str(), &cmdline[0], nullptr, nullptr, FALSE, 0, nullptr, nullptr, &sui, &pi);
     assert(success && "CreateProcessW failed");
-
+#pragma warning(suppress : 4189) // It's used in the assert
     const DWORD waitRet = WaitForSingleObject(readyEvent, INFINITE);
+    UNREFERENCED_PARAMETER(waitRet);
     assert(waitRet == WAIT_OBJECT_0 && "WaitForSingleObject failed");
     CloseHandle(readyEvent);
     CloseHandle(pi.hThread);
@@ -483,8 +486,10 @@ static BOOL WINAPI ctrlHandler(DWORD type)
 static HANDLE duplicateHandle(HANDLE srcProc, HANDLE srcHandle)
 {
     HANDLE ret{};
+#pragma warning(suppress : 4189) // It's used in the assert
     const auto success =
         DuplicateHandle(srcProc, srcHandle, GetCurrentProcess(), &ret, 0, FALSE, DUPLICATE_SAME_ACCESS);
+    UNREFERENCED_PARAMETER(success);
     assert(success && "DuplicateHandle failed");
     return ret;
 }
@@ -603,8 +608,10 @@ static int doChild(std::deque<std::wstring> argv)
     // Assign self to a job object.
     if (jobHandle != nullptr)
     {
+#pragma warning(suppress : 4189) // It's used in the assert
         const BOOL success =
             AssignProcessToJobObject(jobHandle, GetCurrentProcess());
+        UNREFERENCED_PARAMETER(success);
         assert(success && "AssignProcessToJobObject failed");
         CloseHandle(jobHandle);
         jobHandle = nullptr;

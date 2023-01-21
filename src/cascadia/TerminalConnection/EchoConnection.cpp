@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
 #include "pch.h"
@@ -9,22 +9,20 @@
 
 namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
 {
-    EchoConnection::EchoConnection()
+    EchoConnection::EchoConnection() noexcept = default;
+
+    void EchoConnection::Start() noexcept
     {
     }
 
-    void EchoConnection::Start()
-    {
-    }
-
-    void EchoConnection::WriteInput(hstring const& data)
+    void EchoConnection::WriteInput(const hstring& data)
     {
         std::wstringstream prettyPrint;
-        for (wchar_t wch : data)
+        for (const auto& wch : data)
         {
             if (wch < 0x20)
             {
-                prettyPrint << L"^" << (wchar_t)(wch + 0x40);
+                prettyPrint << L"^" << gsl::narrow_cast<wchar_t>(wch + 0x40);
             }
             else if (wch == 0x7f)
             {
@@ -38,13 +36,11 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
         _TerminalOutputHandlers(prettyPrint.str());
     }
 
-    void EchoConnection::Resize(uint32_t rows, uint32_t columns)
+    void EchoConnection::Resize(uint32_t /*rows*/, uint32_t /*columns*/) noexcept
     {
-        rows;
-        columns;
     }
 
-    void EchoConnection::Close()
+    void EchoConnection::Close() noexcept
     {
     }
 }

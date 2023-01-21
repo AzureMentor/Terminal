@@ -4,7 +4,6 @@
 #include <precomp.h>
 
 #include "adaptDispatch.hpp"
-#include "conGetSet.hpp"
 #include "../../types/inc/utils.hpp"
 
 #define ENABLE_INTSAFE_SIGNED_FUNCTIONS
@@ -14,459 +13,257 @@ using namespace Microsoft::Console::VirtualTerminal;
 using namespace Microsoft::Console::VirtualTerminal::DispatchTypes;
 
 // Routine Description:
-// - Small helper to disable all color flags within a given font attributes field
-// Arguments:
-// - pAttr - Pointer to font attributes field to adjust
-// - fIsForeground - True if we're modifying the FOREGROUND colors. False if we're doing BACKGROUND.
-// Return Value:
-// - <none>
-void AdaptDispatch::s_DisableAllColors(_Inout_ WORD* const pAttr, const bool fIsForeground)
-{
-    if (fIsForeground)
-    {
-        *pAttr &= ~(FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_RED | FOREGROUND_INTENSITY);
-    }
-    else
-    {
-        *pAttr &= ~(BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED | BACKGROUND_INTENSITY);
-    }
-}
-
-// Routine Description:
-// - Small helper to help mask off the appropriate foreground/background bits in the colors bitfield.
-// Arguments:
-// - pAttr - Pointer to font attributes field to adjust
-// - wApplyThis - Color values to apply to the low or high word of the font attributes field.
-// - fIsForeground - TRUE = foreground color. FALSE = background color.
-//   Specifies which half of the bit field to reset and then apply wApplyThis
-//   upon.
-// Return Value:
-// - <none>
-void AdaptDispatch::s_ApplyColors(_Inout_ WORD* const pAttr, const WORD wApplyThis, const bool fIsForeground)
-{
-    // Copy the new attribute to apply
-    WORD wNewColors = wApplyThis;
-
-    // Mask off only the foreground or background
-    if (fIsForeground)
-    {
-        *pAttr &= ~(FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_RED | FOREGROUND_INTENSITY);
-        wNewColors &= (FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_RED | FOREGROUND_INTENSITY);
-    }
-    else
-    {
-        *pAttr &= ~(BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED | BACKGROUND_INTENSITY);
-        wNewColors &= (BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED | BACKGROUND_INTENSITY);
-    }
-
-    // Apply appropriate flags.
-    *pAttr |= wNewColors;
-}
-
-// Routine Description:
-// - Helper to apply the actual flags to each text attributes field.
-// - Placed as a helper so it can be recursive/re-entrant for some of the
-//   convenience flag methods that perform similar/multiple operations in one
-//   command.
-// Arguments:
-// - opt - Graphics option sent to us by the parser/requestor.
-// - pAttr - Pointer to the font attribute field to adjust
-// Return Value:
-// - <none>
-void AdaptDispatch::_SetGraphicsOptionHelper(const DispatchTypes::GraphicsOptions opt, _Inout_ WORD* const pAttr)
-{
-    switch (opt)
-    {
-    case DispatchTypes::GraphicsOptions::Off:
-        FAIL_FAST_MSG("GraphicsOptions::Off should be handled by _SetDefaultColorHelper");
-        break;
-    // MSFT:16398982 - These two are now handled by _SetBoldColorHelper
-    // case DispatchTypes::GraphicsOptions::BoldBright:
-    // case DispatchTypes::GraphicsOptions::UnBold:
-    case DispatchTypes::GraphicsOptions::Negative:
-        *pAttr |= COMMON_LVB_REVERSE_VIDEO;
-        _fChangedMetaAttrs = true;
-        break;
-    case DispatchTypes::GraphicsOptions::Underline:
-        // TODO:GH#2915 Treat underline separately from LVB_UNDERSCORE
-        *pAttr |= COMMON_LVB_UNDERSCORE;
-        _fChangedMetaAttrs = true;
-        break;
-    case DispatchTypes::GraphicsOptions::Positive:
-        *pAttr &= ~COMMON_LVB_REVERSE_VIDEO;
-        _fChangedMetaAttrs = true;
-        break;
-    case DispatchTypes::GraphicsOptions::NoUnderline:
-        *pAttr &= ~COMMON_LVB_UNDERSCORE;
-        _fChangedMetaAttrs = true;
-        break;
-    case DispatchTypes::GraphicsOptions::ForegroundBlack:
-        s_DisableAllColors(pAttr, true); // turn off all color flags first.
-        _fChangedForeground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::ForegroundBlue:
-        s_DisableAllColors(pAttr, true); // turn off all color flags first.
-        *pAttr |= FOREGROUND_BLUE;
-        _fChangedForeground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::ForegroundGreen:
-        s_DisableAllColors(pAttr, true); // turn off all color flags first.
-        *pAttr |= FOREGROUND_GREEN;
-        _fChangedForeground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::ForegroundCyan:
-        s_DisableAllColors(pAttr, true); // turn off all color flags first.
-        *pAttr |= FOREGROUND_BLUE | FOREGROUND_GREEN;
-        _fChangedForeground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::ForegroundRed:
-        s_DisableAllColors(pAttr, true); // turn off all color flags first.
-        *pAttr |= FOREGROUND_RED;
-        _fChangedForeground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::ForegroundMagenta:
-        s_DisableAllColors(pAttr, true); // turn off all color flags first.
-        *pAttr |= FOREGROUND_BLUE | FOREGROUND_RED;
-        _fChangedForeground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::ForegroundYellow:
-        s_DisableAllColors(pAttr, true); // turn off all color flags first.
-        *pAttr |= FOREGROUND_GREEN | FOREGROUND_RED;
-        _fChangedForeground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::ForegroundWhite:
-        s_DisableAllColors(pAttr, true); // turn off all color flags first.
-        *pAttr |= FOREGROUND_BLUE | FOREGROUND_GREEN | FOREGROUND_RED;
-        _fChangedForeground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::ForegroundDefault:
-        FAIL_FAST_MSG("GraphicsOptions::ForegroundDefault should be handled by _SetDefaultColorHelper");
-        break;
-    case DispatchTypes::GraphicsOptions::BackgroundBlack:
-        s_DisableAllColors(pAttr, false); // turn off all color flags first.
-        _fChangedBackground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BackgroundBlue:
-        s_DisableAllColors(pAttr, false); // turn off all color flags first.
-        *pAttr |= BACKGROUND_BLUE;
-        _fChangedBackground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BackgroundGreen:
-        s_DisableAllColors(pAttr, false); // turn off all color flags first.
-        *pAttr |= BACKGROUND_GREEN;
-        _fChangedBackground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BackgroundCyan:
-        s_DisableAllColors(pAttr, false); // turn off all color flags first.
-        *pAttr |= BACKGROUND_BLUE | BACKGROUND_GREEN;
-        _fChangedBackground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BackgroundRed:
-        s_DisableAllColors(pAttr, false); // turn off all color flags first.
-        *pAttr |= BACKGROUND_RED;
-        _fChangedBackground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BackgroundMagenta:
-        s_DisableAllColors(pAttr, false); // turn off all color flags first.
-        *pAttr |= BACKGROUND_BLUE | BACKGROUND_RED;
-        _fChangedBackground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BackgroundYellow:
-        s_DisableAllColors(pAttr, false); // turn off all color flags first.
-        *pAttr |= BACKGROUND_GREEN | BACKGROUND_RED;
-        _fChangedBackground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BackgroundWhite:
-        s_DisableAllColors(pAttr, false); // turn off all color flags first.
-        *pAttr |= BACKGROUND_BLUE | BACKGROUND_GREEN | BACKGROUND_RED;
-        _fChangedBackground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BackgroundDefault:
-        FAIL_FAST_MSG("GraphicsOptions::BackgroundDefault should be handled by _SetDefaultColorHelper");
-        break;
-    case DispatchTypes::GraphicsOptions::BrightForegroundBlack:
-        _SetGraphicsOptionHelper(GraphicsOptions::ForegroundBlack, pAttr);
-        *pAttr |= FOREGROUND_INTENSITY;
-        _fChangedForeground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BrightForegroundBlue:
-        _SetGraphicsOptionHelper(GraphicsOptions::ForegroundBlue, pAttr);
-        *pAttr |= FOREGROUND_INTENSITY;
-        _fChangedForeground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BrightForegroundGreen:
-        _SetGraphicsOptionHelper(GraphicsOptions::ForegroundGreen, pAttr);
-        *pAttr |= FOREGROUND_INTENSITY;
-        _fChangedForeground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BrightForegroundCyan:
-        _SetGraphicsOptionHelper(GraphicsOptions::ForegroundCyan, pAttr);
-        *pAttr |= FOREGROUND_INTENSITY;
-        _fChangedForeground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BrightForegroundRed:
-        _SetGraphicsOptionHelper(GraphicsOptions::ForegroundRed, pAttr);
-        *pAttr |= FOREGROUND_INTENSITY;
-        _fChangedForeground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BrightForegroundMagenta:
-        _SetGraphicsOptionHelper(GraphicsOptions::ForegroundMagenta, pAttr);
-        *pAttr |= FOREGROUND_INTENSITY;
-        _fChangedForeground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BrightForegroundYellow:
-        _SetGraphicsOptionHelper(GraphicsOptions::ForegroundYellow, pAttr);
-        *pAttr |= FOREGROUND_INTENSITY;
-        _fChangedForeground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BrightForegroundWhite:
-        _SetGraphicsOptionHelper(GraphicsOptions::ForegroundWhite, pAttr);
-        *pAttr |= FOREGROUND_INTENSITY;
-        _fChangedForeground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BrightBackgroundBlack:
-        _SetGraphicsOptionHelper(GraphicsOptions::BackgroundBlack, pAttr);
-        *pAttr |= BACKGROUND_INTENSITY;
-        _fChangedBackground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BrightBackgroundBlue:
-        _SetGraphicsOptionHelper(GraphicsOptions::BackgroundBlue, pAttr);
-        *pAttr |= BACKGROUND_INTENSITY;
-        _fChangedBackground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BrightBackgroundGreen:
-        _SetGraphicsOptionHelper(GraphicsOptions::BackgroundGreen, pAttr);
-        *pAttr |= BACKGROUND_INTENSITY;
-        _fChangedBackground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BrightBackgroundCyan:
-        _SetGraphicsOptionHelper(GraphicsOptions::BackgroundCyan, pAttr);
-        *pAttr |= BACKGROUND_INTENSITY;
-        _fChangedBackground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BrightBackgroundRed:
-        _SetGraphicsOptionHelper(GraphicsOptions::BackgroundRed, pAttr);
-        *pAttr |= BACKGROUND_INTENSITY;
-        _fChangedBackground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BrightBackgroundMagenta:
-        _SetGraphicsOptionHelper(GraphicsOptions::BackgroundMagenta, pAttr);
-        *pAttr |= BACKGROUND_INTENSITY;
-        _fChangedBackground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BrightBackgroundYellow:
-        _SetGraphicsOptionHelper(GraphicsOptions::BackgroundYellow, pAttr);
-        *pAttr |= BACKGROUND_INTENSITY;
-        _fChangedBackground = true;
-        break;
-    case DispatchTypes::GraphicsOptions::BrightBackgroundWhite:
-        _SetGraphicsOptionHelper(GraphicsOptions::BackgroundWhite, pAttr);
-        *pAttr |= BACKGROUND_INTENSITY;
-        _fChangedBackground = true;
-        break;
-    }
-}
-
-// Routine Description:
-// Returns true if the GraphicsOption represents an extended text attribute.
-//   These include things such as Underlined, Italics, Blinking, etc.
-// Return Value:
-// - true if the opt is the indicator for an extended text attribute, false otherwise.
-bool AdaptDispatch::s_IsExtendedTextAttribute(const DispatchTypes::GraphicsOptions opt) noexcept
-{
-    // TODO:GH#2916 add support for DoublyUnderlined, Faint(RGBColorOrFaint).
-    // These two are currently partially implemented as other things:
-    // * Faint is approximately the opposite of bold does, though it's much
-    //   [more complicated](
-    //   https://github.com/microsoft/terminal/issues/2916#issuecomment-535860910)
-    //   and less supported/used.
-    // * Doubly underlined should exist in a trinary state with Underlined
-    return opt == DispatchTypes::GraphicsOptions::Italics ||
-           opt == DispatchTypes::GraphicsOptions::NotItalics ||
-           opt == DispatchTypes::GraphicsOptions::BlinkOrXterm256Index ||
-           opt == DispatchTypes::GraphicsOptions::Steady ||
-           opt == DispatchTypes::GraphicsOptions::Invisible ||
-           opt == DispatchTypes::GraphicsOptions::Visible ||
-           opt == DispatchTypes::GraphicsOptions::CrossedOut ||
-           opt == DispatchTypes::GraphicsOptions::NotCrossedOut;
-}
-
-// Routine Description:
-// Returns true if the GraphicsOption represents an extended color option.
-//   These are followed by up to 4 more values which compose the entire option.
-// Return Value:
-// - true if the opt is the indicator for an extended color sequence, false otherwise.
-bool AdaptDispatch::s_IsRgbColorOption(const DispatchTypes::GraphicsOptions opt)
-{
-    return opt == DispatchTypes::GraphicsOptions::ForegroundExtended ||
-           opt == DispatchTypes::GraphicsOptions::BackgroundExtended;
-}
-
-// Routine Description:
-// Returns true if the GraphicsOption represents an extended color option.
-//   These are followed by up to 4 more values which compose the entire option.
-// Return Value:
-// - true if the opt is the indicator for an extended color sequence, false otherwise.
-bool AdaptDispatch::s_IsBoldColorOption(const DispatchTypes::GraphicsOptions opt) noexcept
-{
-    return opt == DispatchTypes::GraphicsOptions::BoldBright ||
-           opt == DispatchTypes::GraphicsOptions::UnBold;
-}
-
-// Function Description:
-// - checks if this graphics option should set either the console's FG or BG to
-//the default attributes.
-// Return Value:
-// - true if the opt sets either/or attribute to the defaults, false otherwise.
-bool AdaptDispatch::s_IsDefaultColorOption(const DispatchTypes::GraphicsOptions opt) noexcept
-{
-    return opt == DispatchTypes::GraphicsOptions::Off ||
-           opt == DispatchTypes::GraphicsOptions::ForegroundDefault ||
-           opt == DispatchTypes::GraphicsOptions::BackgroundDefault;
-}
-
-// Routine Description:
 // - Helper to parse extended graphics options, which start with 38 (FG) or 48 (BG)
 //     These options are followed by either a 2 (RGB) or 5 (xterm index)
 //      RGB sequences then take 3 MORE params to designate the R, G, B parts of the color
 //      Xterm index will use the param that follows to use a color from the preset 256 color xterm color table.
 // Arguments:
-// - rgOptions - An array of options that will be used to generate the RGB color
-// - cOptions - The count of options
-// - prgbColor - A pointer to place the generated RGB color into.
-// - pfIsForeground - a pointer to place whether or not the parsed color is for the foreground or not.
-// - pcOptionsConsumed - a pointer to place the number of options we consumed parsing this option.
-// - ColorTable - the windows color table, for xterm indices < 16
-// - cColorTable - The number of elements in the windows color table.
+// - options - An array of options that will be used to generate the RGB color
+// - attr - The attribute that will be updated with the parsed color.
+// - isForeground - Whether or not the parsed color is for the foreground.
 // Return Value:
-// Returns true if we successfully parsed an extended color option from the options array.
-// - This corresponds to the following number of options consumed (pcOptionsConsumed):
-//     1 - false, not enough options to parse.
-//     2 - false, not enough options to parse.
-//     3 - true, parsed an xterm index to a color
-//     5 - true, parsed an RGB color.
-bool AdaptDispatch::_SetRgbColorsHelper(_In_reads_(cOptions) const DispatchTypes::GraphicsOptions* const rgOptions,
-                                        const size_t cOptions,
-                                        _Out_ COLORREF* const prgbColor,
-                                        _Out_ bool* const pfIsForeground,
-                                        _Out_ size_t* const pcOptionsConsumed)
+// - The number of options consumed, not including the initial 38/48.
+size_t AdaptDispatch::_SetRgbColorsHelper(const VTParameters options,
+                                          TextAttribute& attr,
+                                          const bool isForeground) noexcept
 {
-    bool fSuccess = false;
-    *pcOptionsConsumed = 1;
-    if (cOptions >= 2 && s_IsRgbColorOption(rgOptions[0]))
+    size_t optionsConsumed = 1;
+    const DispatchTypes::GraphicsOptions typeOpt = options.at(0);
+    if (typeOpt == DispatchTypes::GraphicsOptions::RGBColorOrFaint)
     {
-        *pcOptionsConsumed = 2;
-        DispatchTypes::GraphicsOptions extendedOpt = rgOptions[0];
-        DispatchTypes::GraphicsOptions typeOpt = rgOptions[1];
-
-        if (extendedOpt == DispatchTypes::GraphicsOptions::ForegroundExtended)
+        optionsConsumed = 4;
+        const size_t red = options.at(1).value_or(0);
+        const size_t green = options.at(2).value_or(0);
+        const size_t blue = options.at(3).value_or(0);
+        // ensure that each value fits in a byte
+        if (red <= 255 && green <= 255 && blue <= 255)
         {
-            *pfIsForeground = true;
+            const auto rgbColor = RGB(red, green, blue);
+            attr.SetColor(rgbColor, isForeground);
         }
-        else if (extendedOpt == DispatchTypes::GraphicsOptions::BackgroundExtended)
+    }
+    else if (typeOpt == DispatchTypes::GraphicsOptions::BlinkOrXterm256Index)
+    {
+        optionsConsumed = 2;
+        const size_t tableIndex = options.at(1).value_or(0);
+        if (tableIndex <= 255)
         {
-            *pfIsForeground = false;
-        }
-
-        if (typeOpt == DispatchTypes::GraphicsOptions::RGBColorOrFaint && cOptions >= 5)
-        {
-            *pcOptionsConsumed = 5;
-            // ensure that each value fits in a byte
-            unsigned int red = rgOptions[2] > 255 ? 255 : rgOptions[2];
-            unsigned int green = rgOptions[3] > 255 ? 255 : rgOptions[3];
-            unsigned int blue = rgOptions[4] > 255 ? 255 : rgOptions[4];
-
-            *prgbColor = RGB(red, green, blue);
-
-            fSuccess = !!_conApi->SetConsoleRGBTextAttribute(*prgbColor, *pfIsForeground);
-        }
-        else if (typeOpt == DispatchTypes::GraphicsOptions::BlinkOrXterm256Index && cOptions >= 3)
-        {
-            *pcOptionsConsumed = 3;
-            if (rgOptions[2] <= 255) // ensure that the provided index is on the table
+            const auto adjustedIndex = gsl::narrow_cast<BYTE>(tableIndex);
+            if (isForeground)
             {
-                unsigned int tableIndex = rgOptions[2];
-
-                fSuccess = !!_conApi->SetConsoleXtermTextAttribute(tableIndex, *pfIsForeground);
+                attr.SetIndexedForeground256(adjustedIndex);
+            }
+            else
+            {
+                attr.SetIndexedBackground256(adjustedIndex);
             }
         }
     }
-    return fSuccess;
+    return optionsConsumed;
 }
 
-bool AdaptDispatch::_SetBoldColorHelper(const DispatchTypes::GraphicsOptions option)
-{
-    const bool bold = (option == DispatchTypes::GraphicsOptions::BoldBright);
-    return !!_conApi->PrivateBoldText(bold);
-}
-
-bool AdaptDispatch::_SetDefaultColorHelper(const DispatchTypes::GraphicsOptions option)
-{
-    const bool fg = option == GraphicsOptions::Off || option == GraphicsOptions::ForegroundDefault;
-    const bool bg = option == GraphicsOptions::Off || option == GraphicsOptions::BackgroundDefault;
-
-    bool success = _conApi->PrivateSetDefaultAttributes(fg, bg);
-
-    if (success && fg && bg)
-    {
-        // If we're resetting both the FG & BG, also reset the meta attributes (underline)
-        //      as well as the boldness
-        success = _conApi->PrivateSetLegacyAttributes(0, false, false, true) &&
-                  _conApi->PrivateBoldText(false) &&
-                  _conApi->PrivateSetExtendedTextAttributes(ExtendedAttributes::Normal);
-    }
-    return success;
-}
-
-// Method Description:
-// - Sets the attributes for extended text attributes. Retrieves the current
-//   extended attrs from the console, modifies them according to the new
-//   GraphicsOption, and the sets them again.
-// - Notably does _not_ handle Bold, Faint, Underline, DoublyUnderlined, or
-//   NoUnderline. Those should be handled in TODO:GH#2916.
+// Routine Description:
+// - Helper to apply a single graphic rendition option to an attribute.
 // Arguments:
-// - opt: the graphics option to set
+// - options - An array of options.
+// - optionIndex - The start index of the option that will be applied.
+// - attr - The attribute that will be updated with the applied option.
 // Return Value:
-// - True if handled successfully. False otherwise.
-bool AdaptDispatch::_SetExtendedTextAttributeHelper(const DispatchTypes::GraphicsOptions opt)
+// - The number of entries in the array that were consumed.
+size_t AdaptDispatch::_ApplyGraphicsOption(const VTParameters options,
+                                           const size_t optionIndex,
+                                           TextAttribute& attr) noexcept
 {
-    ExtendedAttributes attrs{ ExtendedAttributes::Normal };
-
-    RETURN_BOOL_IF_FALSE(_conApi->PrivateGetExtendedTextAttributes(&attrs));
-
+    const GraphicsOptions opt = options.at(optionIndex);
     switch (opt)
     {
-    case DispatchTypes::GraphicsOptions::Italics:
-        WI_SetFlag(attrs, ExtendedAttributes::Italics);
-        break;
-    case DispatchTypes::GraphicsOptions::NotItalics:
-        WI_ClearFlag(attrs, ExtendedAttributes::Italics);
-        break;
-    case DispatchTypes::GraphicsOptions::BlinkOrXterm256Index:
-        WI_SetFlag(attrs, ExtendedAttributes::Blinking);
-        break;
-    case DispatchTypes::GraphicsOptions::Steady:
-        WI_ClearFlag(attrs, ExtendedAttributes::Blinking);
-        break;
-    case DispatchTypes::GraphicsOptions::Invisible:
-        WI_SetFlag(attrs, ExtendedAttributes::Invisible);
-        break;
-    case DispatchTypes::GraphicsOptions::Visible:
-        WI_ClearFlag(attrs, ExtendedAttributes::Invisible);
-        break;
-    case DispatchTypes::GraphicsOptions::CrossedOut:
-        WI_SetFlag(attrs, ExtendedAttributes::CrossedOut);
-        break;
-    case DispatchTypes::GraphicsOptions::NotCrossedOut:
-        WI_ClearFlag(attrs, ExtendedAttributes::CrossedOut);
-        break;
-        // TODO:GH#2916 add support for the following
-        // case DispatchTypes::GraphicsOptions::DoublyUnderlined:
-        // case DispatchTypes::GraphicsOptions::RGBColorOrFaint:
-        // case DispatchTypes::GraphicsOptions::DoublyUnderlined:
+    case Off:
+        attr.SetDefaultForeground();
+        attr.SetDefaultBackground();
+        attr.SetDefaultRenditionAttributes();
+        return 1;
+    case ForegroundDefault:
+        attr.SetDefaultForeground();
+        return 1;
+    case BackgroundDefault:
+        attr.SetDefaultBackground();
+        return 1;
+    case Intense:
+        attr.SetIntense(true);
+        return 1;
+    case RGBColorOrFaint:
+        attr.SetFaint(true);
+        return 1;
+    case NotIntenseOrFaint:
+        attr.SetIntense(false);
+        attr.SetFaint(false);
+        return 1;
+    case Italics:
+        attr.SetItalic(true);
+        return 1;
+    case NotItalics:
+        attr.SetItalic(false);
+        return 1;
+    case BlinkOrXterm256Index:
+    case RapidBlink: // We just interpret rapid blink as an alias of blink.
+        attr.SetBlinking(true);
+        return 1;
+    case Steady:
+        attr.SetBlinking(false);
+        return 1;
+    case Invisible:
+        attr.SetInvisible(true);
+        return 1;
+    case Visible:
+        attr.SetInvisible(false);
+        return 1;
+    case CrossedOut:
+        attr.SetCrossedOut(true);
+        return 1;
+    case NotCrossedOut:
+        attr.SetCrossedOut(false);
+        return 1;
+    case Negative:
+        attr.SetReverseVideo(true);
+        return 1;
+    case Positive:
+        attr.SetReverseVideo(false);
+        return 1;
+    case Underline:
+        attr.SetUnderlined(true);
+        return 1;
+    case DoublyUnderlined:
+        attr.SetDoublyUnderlined(true);
+        return 1;
+    case NoUnderline:
+        attr.SetUnderlined(false);
+        attr.SetDoublyUnderlined(false);
+        return 1;
+    case Overline:
+        attr.SetOverlined(true);
+        return 1;
+    case NoOverline:
+        attr.SetOverlined(false);
+        return 1;
+    case ForegroundBlack:
+        attr.SetIndexedForeground(TextColor::DARK_BLACK);
+        return 1;
+    case ForegroundBlue:
+        attr.SetIndexedForeground(TextColor::DARK_BLUE);
+        return 1;
+    case ForegroundGreen:
+        attr.SetIndexedForeground(TextColor::DARK_GREEN);
+        return 1;
+    case ForegroundCyan:
+        attr.SetIndexedForeground(TextColor::DARK_CYAN);
+        return 1;
+    case ForegroundRed:
+        attr.SetIndexedForeground(TextColor::DARK_RED);
+        return 1;
+    case ForegroundMagenta:
+        attr.SetIndexedForeground(TextColor::DARK_MAGENTA);
+        return 1;
+    case ForegroundYellow:
+        attr.SetIndexedForeground(TextColor::DARK_YELLOW);
+        return 1;
+    case ForegroundWhite:
+        attr.SetIndexedForeground(TextColor::DARK_WHITE);
+        return 1;
+    case BackgroundBlack:
+        attr.SetIndexedBackground(TextColor::DARK_BLACK);
+        return 1;
+    case BackgroundBlue:
+        attr.SetIndexedBackground(TextColor::DARK_BLUE);
+        return 1;
+    case BackgroundGreen:
+        attr.SetIndexedBackground(TextColor::DARK_GREEN);
+        return 1;
+    case BackgroundCyan:
+        attr.SetIndexedBackground(TextColor::DARK_CYAN);
+        return 1;
+    case BackgroundRed:
+        attr.SetIndexedBackground(TextColor::DARK_RED);
+        return 1;
+    case BackgroundMagenta:
+        attr.SetIndexedBackground(TextColor::DARK_MAGENTA);
+        return 1;
+    case BackgroundYellow:
+        attr.SetIndexedBackground(TextColor::DARK_YELLOW);
+        return 1;
+    case BackgroundWhite:
+        attr.SetIndexedBackground(TextColor::DARK_WHITE);
+        return 1;
+    case BrightForegroundBlack:
+        attr.SetIndexedForeground(TextColor::BRIGHT_BLACK);
+        return 1;
+    case BrightForegroundBlue:
+        attr.SetIndexedForeground(TextColor::BRIGHT_BLUE);
+        return 1;
+    case BrightForegroundGreen:
+        attr.SetIndexedForeground(TextColor::BRIGHT_GREEN);
+        return 1;
+    case BrightForegroundCyan:
+        attr.SetIndexedForeground(TextColor::BRIGHT_CYAN);
+        return 1;
+    case BrightForegroundRed:
+        attr.SetIndexedForeground(TextColor::BRIGHT_RED);
+        return 1;
+    case BrightForegroundMagenta:
+        attr.SetIndexedForeground(TextColor::BRIGHT_MAGENTA);
+        return 1;
+    case BrightForegroundYellow:
+        attr.SetIndexedForeground(TextColor::BRIGHT_YELLOW);
+        return 1;
+    case BrightForegroundWhite:
+        attr.SetIndexedForeground(TextColor::BRIGHT_WHITE);
+        return 1;
+    case BrightBackgroundBlack:
+        attr.SetIndexedBackground(TextColor::BRIGHT_BLACK);
+        return 1;
+    case BrightBackgroundBlue:
+        attr.SetIndexedBackground(TextColor::BRIGHT_BLUE);
+        return 1;
+    case BrightBackgroundGreen:
+        attr.SetIndexedBackground(TextColor::BRIGHT_GREEN);
+        return 1;
+    case BrightBackgroundCyan:
+        attr.SetIndexedBackground(TextColor::BRIGHT_CYAN);
+        return 1;
+    case BrightBackgroundRed:
+        attr.SetIndexedBackground(TextColor::BRIGHT_RED);
+        return 1;
+    case BrightBackgroundMagenta:
+        attr.SetIndexedBackground(TextColor::BRIGHT_MAGENTA);
+        return 1;
+    case BrightBackgroundYellow:
+        attr.SetIndexedBackground(TextColor::BRIGHT_YELLOW);
+        return 1;
+    case BrightBackgroundWhite:
+        attr.SetIndexedBackground(TextColor::BRIGHT_WHITE);
+        return 1;
+    case ForegroundExtended:
+        return 1 + _SetRgbColorsHelper(options.subspan(optionIndex + 1), attr, true);
+    case BackgroundExtended:
+        return 1 + _SetRgbColorsHelper(options.subspan(optionIndex + 1), attr, false);
+    default:
+        return 1;
     }
+}
 
-    return _conApi->PrivateSetExtendedTextAttributes(attrs);
+// Routine Description:
+// - Helper to apply a number of graphic rendition options to an attribute.
+// Arguments:
+// - options - An array of options that will be applied in sequence.
+// - attr - The attribute that will be updated with the applied options.
+// Return Value:
+// - <none>
+void AdaptDispatch::_ApplyGraphicsOptions(const VTParameters options,
+                                          TextAttribute& attr) noexcept
+{
+    for (size_t i = 0; i < options.size();)
+    {
+        i += _ApplyGraphicsOption(options, i, attr);
+    }
 }
 
 // Routine Description:
@@ -474,79 +271,76 @@ bool AdaptDispatch::_SetExtendedTextAttributeHelper(const DispatchTypes::Graphic
 //   characters written into the buffer.
 //       - Options include colors, invert, underlines, and other "font style"
 //         type options.
-
 // Arguments:
-// - rgOptions - An array of options that will be applied from 0 to N, in order,
+// - options - An array of options that will be applied from 0 to N, in order,
 //   one at a time by setting or removing flags in the font style properties.
-// - cOptions - The count of options (a.k.a. the N in the above line of comments)
 // Return Value:
-// - True if handled successfully. False otherwise.
-bool AdaptDispatch::SetGraphicsRendition(_In_reads_(cOptions) const DispatchTypes::GraphicsOptions* const rgOptions,
-                                         const size_t cOptions)
+// - True.
+bool AdaptDispatch::SetGraphicsRendition(const VTParameters options)
 {
-    // We use the private function here to get just the default color attributes
-    // as a performance optimization. Calling the public
-    // GetConsoleScreenBufferInfoEx costs a lot of performance time/power in a
-    // tight loop because it has to fill the Largest Window Size by asking the
-    // OS and wastes time memcpying colors and other data we do not need to
-    // resolve this Set Graphics Rendition request.
-    WORD attr;
-    bool fSuccess = !!_conApi->PrivateGetConsoleScreenBufferAttributes(&attr);
+    auto attr = _api.GetTextBuffer().GetCurrentAttributes();
+    _ApplyGraphicsOptions(options, attr);
+    _api.SetTextAttributes(attr);
+    return true;
+}
 
-    if (fSuccess)
+// Routine Description:
+// - DECSCA - Modifies the character protection attribute. This operation was
+//   originally intended to support a range of logical character attributes,
+//   but the protected attribute was the only one ever implemented.
+// Arguments:
+// - options - An array of options that will be applied in order.
+// Return Value:
+// - True.
+bool AdaptDispatch::SetCharacterProtectionAttribute(const VTParameters options)
+{
+    auto& textBuffer = _api.GetTextBuffer();
+    auto attr = textBuffer.GetCurrentAttributes();
+    for (size_t i = 0; i < options.size(); i++)
     {
-        // Run through the graphics options and apply them
-        for (size_t i = 0; i < cOptions; i++)
+        const LogicalAttributeOptions opt = options.at(i);
+        switch (opt)
         {
-            DispatchTypes::GraphicsOptions opt = rgOptions[i];
-            if (s_IsDefaultColorOption(opt))
-            {
-                fSuccess = _SetDefaultColorHelper(opt);
-            }
-            else if (s_IsBoldColorOption(opt))
-            {
-                fSuccess = _SetBoldColorHelper(rgOptions[i]);
-            }
-            else if (s_IsExtendedTextAttribute(opt))
-            {
-                fSuccess = _SetExtendedTextAttributeHelper(rgOptions[i]);
-            }
-            else if (s_IsRgbColorOption(opt))
-            {
-                COLORREF rgbColor;
-                bool fIsForeground = true;
-
-                size_t cOptionsConsumed = 0;
-
-                // _SetRgbColorsHelper will call the appropriate ConApi function
-                fSuccess = _SetRgbColorsHelper(&(rgOptions[i]),
-                                               cOptions - i,
-                                               &rgbColor,
-                                               &fIsForeground,
-                                               &cOptionsConsumed);
-
-                i += (cOptionsConsumed - 1); // cOptionsConsumed includes the opt we're currently on.
-            }
-            else
-            {
-                _SetGraphicsOptionHelper(opt, &attr);
-                fSuccess = !!_conApi->PrivateSetLegacyAttributes(attr,
-                                                                 _fChangedForeground,
-                                                                 _fChangedBackground,
-                                                                 _fChangedMetaAttrs);
-
-                // Make sure we un-bold
-                if (fSuccess && opt == DispatchTypes::GraphicsOptions::Off)
-                {
-                    fSuccess = _SetBoldColorHelper(opt);
-                }
-
-                _fChangedForeground = false;
-                _fChangedBackground = false;
-                _fChangedMetaAttrs = false;
-            }
+        case Default:
+            attr.SetProtected(false);
+            break;
+        case Protected:
+            attr.SetProtected(true);
+            break;
+        case Unprotected:
+            attr.SetProtected(false);
+            break;
         }
     }
+    textBuffer.SetCurrentAttributes(attr);
+    return true;
+}
 
-    return fSuccess;
+// Method Description:
+// - Saves the current text attributes to an internal stack.
+// Arguments:
+// - options: if not empty, specify which portions of the current text attributes should
+//   be saved. Options that are not supported are ignored. If no options are specified,
+//   all attributes are stored.
+// Return Value:
+// - True.
+bool AdaptDispatch::PushGraphicsRendition(const VTParameters options)
+{
+    const auto currentAttributes = _api.GetTextBuffer().GetCurrentAttributes();
+    _sgrStack.Push(currentAttributes, options);
+    return true;
+}
+
+// Method Description:
+// - Restores text attributes from the internal stack. If only portions of text attributes
+//   were saved, combines those with the current attributes.
+// Arguments:
+// - <none>
+// Return Value:
+// - True.
+bool AdaptDispatch::PopGraphicsRendition()
+{
+    const auto currentAttributes = _api.GetTextBuffer().GetCurrentAttributes();
+    _api.SetTextAttributes(_sgrStack.Pop(currentAttributes));
+    return true;
 }

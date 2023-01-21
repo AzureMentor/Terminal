@@ -9,9 +9,8 @@
 #include "_output.h"
 #include "misc.h"
 #include "handle.h"
-#include "../buffer/out/CharRow.hpp"
 
-#include <math.h>
+#include <cmath>
 #include "../interactivity/inc/ServiceLocator.hpp"
 #include "../types/inc/Viewport.hpp"
 #include "../types/inc/GlyphWidth.hpp"
@@ -46,24 +45,22 @@ SCREEN_INFORMATION::SCREEN_INFORMATION(
     ScrollScale{ 1ul },
     _pConsoleWindowMetrics{ pMetrics },
     _pAccessibilityNotifier{ pNotifier },
+    _api{ *this },
     _stateMachine{ nullptr },
-    _scrollMargins{ Viewport::FromCoord({ 0 }) },
+    _scrollMargins{ Viewport::Empty() },
     _viewport(Viewport::Empty()),
     _psiAlternateBuffer{ nullptr },
     _psiMainBuffer{ nullptr },
-    _rcAltSavedClientNew{ 0 },
-    _rcAltSavedClientOld{ 0 },
     _fAltWindowChanged{ false },
     _PopupAttributes{ popupAttributes },
-    _tabStops{},
     _virtualBottom{ 0 },
-    _renderTarget{ *this },
     _currentFont{ fontInfo },
-    _desiredFont{ fontInfo }
+    _desiredFont{ fontInfo },
+    _ignoreLegacyEquivalentVTAttributes{ false }
 {
     // Check if VT mode is enabled. Note that this can be true w/o calling
     // SetConsoleMode, if VirtualTerminalLevel is set to !=0 in the registry.
-    const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
     if (gci.GetVirtTermLevel() != 0)
     {
         OutputMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
@@ -90,9 +87,9 @@ SCREEN_INFORMATION::~SCREEN_INFORMATION()
 // - nFont - the initial font to generate text with.
 // - dwScreenBufferSize - the initial size of the screen buffer (in rows/columns).
 // Return Value:
-[[nodiscard]] NTSTATUS SCREEN_INFORMATION::CreateInstance(_In_ COORD coordWindowSize,
+[[nodiscard]] NTSTATUS SCREEN_INFORMATION::CreateInstance(_In_ til::size coordWindowSize,
                                                           const FontInfo fontInfo,
-                                                          _In_ COORD coordScreenBufferSize,
+                                                          _In_ til::size coordScreenBufferSize,
                                                           const TextAttribute defaultAttributes,
                                                           const TextAttribute popupAttributes,
                                                           const UINT uiCursorSize,
@@ -102,13 +99,14 @@ SCREEN_INFORMATION::~SCREEN_INFORMATION()
 
     try
     {
-        IWindowMetrics* pMetrics = ServiceLocator::LocateWindowMetrics();
-        THROW_IF_NULL_ALLOC(pMetrics);
+        auto pMetrics = ServiceLocator::LocateWindowMetrics();
+        THROW_HR_IF_NULL(E_FAIL, pMetrics);
 
-        IAccessibilityNotifier* pNotifier = ServiceLocator::LocateAccessibilityNotifier();
-        THROW_IF_NULL_ALLOC(pNotifier);
-
-        SCREEN_INFORMATION* const pScreen = new SCREEN_INFORMATION(pMetrics, pNotifier, popupAttributes, fontInfo);
+        const auto pNotifier = ServiceLocator::LocateAccessibilityNotifier();
+        // It is possible for pNotifier to be null and that's OK.
+        // For instance, the PTY doesn't need to send events. Just pass it along
+        // and be sure that `SCREEN_INFORMATION` bypasses all event work if it's not there.
+        const auto pScreen = new SCREEN_INFORMATION(pMetrics, pNotifier, popupAttributes, fontInfo);
 
         // Set up viewport
         pScreen->_viewport = Viewport::FromDimensions({ 0, 0 },
@@ -119,23 +117,13 @@ SCREEN_INFORMATION::~SCREEN_INFORMATION()
         pScreen->_textBuffer = std::make_unique<TextBuffer>(coordScreenBufferSize,
                                                             defaultAttributes,
                                                             uiCursorSize,
-                                                            pScreen->_renderTarget);
+                                                            pScreen->IsActiveScreenBuffer(),
+                                                            *ServiceLocator::LocateGlobals().pRender);
 
         const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-        pScreen->_textBuffer->GetCursor().SetColor(gci.GetCursorColor());
         pScreen->_textBuffer->GetCursor().SetType(gci.GetCursorType());
 
-        const NTSTATUS status = pScreen->_InitializeOutputStateMachine();
-
-        if (pScreen->InVTMode())
-        {
-            // microsoft/terminal#411: If VT mode is enabled, lets construct the
-            // VT tab stops. Without this line, if a user has
-            // VirtualTerminalLevel set, then
-            // SetConsoleMode(ENABLE_VIRTUAL_TERMINAL_PROCESSING) won't set our
-            // tab stops, because we're never going from vt off -> on
-            pScreen->SetDefaultVtTabStops();
-        }
+        const auto status = pScreen->_InitializeOutputStateMachine();
 
         if (NT_SUCCESS(status))
         {
@@ -161,19 +149,19 @@ Viewport SCREEN_INFORMATION::GetBufferSize() const
 //      Scrolling mode, this will return our Y dimension as only extending up to
 //      the _virtualBottom. The height of the returned viewport would then be
 //      (number of lines in scrollback) + (number of lines in viewport).
-//   If we're not in teminal scrolling mode, this will return our normal buffer
+//   If we're not in terminal scrolling mode, this will return our normal buffer
 //      size.
 // Arguments:
 // - <none>
 // Return Value:
-// - a viewport whos height is the height of the "terminal" portion of the
+// - a viewport whose height is the height of the "terminal" portion of the
 //      buffer in terminal scrolling mode, and is the height of the full buffer
 //      in normal scrolling mode.
 Viewport SCREEN_INFORMATION::GetTerminalBufferSize() const
 {
     const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
 
-    Viewport v = _textBuffer->GetSize();
+    auto v = _textBuffer->GetSize();
     if (gci.IsTerminalScrolling() && v.Height() > _virtualBottom)
     {
         v = Viewport::FromDimensions({ 0, 0 }, v.Width(), _virtualBottom + 1);
@@ -191,17 +179,6 @@ StateMachine& SCREEN_INFORMATION::GetStateMachine()
     return *_stateMachine;
 }
 
-// Method Description:
-// - returns true if this buffer is in Virtual Terminal Output mode.
-// Arguments:
-// <none>
-// Return Value:
-// true iff this buffer is in Virtual Terminal Output mode.
-bool SCREEN_INFORMATION::InVTMode() const
-{
-    return WI_IsFlagSet(OutputMode, ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-}
-
 // Routine Description:
 // - This routine inserts the screen buffer pointer into the console's list of screen buffers.
 // Arguments:
@@ -211,7 +188,7 @@ bool SCREEN_INFORMATION::InVTMode() const
 // - The console lock must be held when calling this routine.
 void SCREEN_INFORMATION::s_InsertScreenBuffer(_In_ SCREEN_INFORMATION* const pScreenInfo)
 {
-    CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
     FAIL_FAST_IF(!(gci.IsConsoleLocked()));
 
     pScreenInfo->Next = gci.ScreenBuffers;
@@ -227,7 +204,7 @@ void SCREEN_INFORMATION::s_InsertScreenBuffer(_In_ SCREEN_INFORMATION* const pSc
 // - The console lock must be held when calling this routine.
 void SCREEN_INFORMATION::s_RemoveScreenBuffer(_In_ SCREEN_INFORMATION* const pScreenInfo)
 {
-    CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
     if (pScreenInfo == gci.ScreenBuffers)
     {
         gci.ScreenBuffers = pScreenInfo->Next;
@@ -275,15 +252,17 @@ void SCREEN_INFORMATION::s_RemoveScreenBuffer(_In_ SCREEN_INFORMATION* const pSc
 {
     try
     {
-        auto adapter = std::make_unique<AdaptDispatch>(new ConhostInternalGetSet{ *this },
-                                                       new WriteBuffer{ *this });
-        THROW_IF_NULL_ALLOC(adapter.get());
-
+        auto& g = ServiceLocator::LocateGlobals();
+        auto& gci = g.getConsoleInformation();
+        auto& renderer = *g.pRender;
+        auto& renderSettings = gci.GetRenderSettings();
+        auto& terminalInput = gci.GetActiveInputBuffer()->GetTerminalInput();
+        auto adapter = std::make_unique<AdaptDispatch>(_api, renderer, renderSettings, terminalInput);
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(adapter));
         // Note that at this point in the setup, we haven't determined if we're
         //      in VtIo mode or not yet. We'll set the OutputStateMachine's
         //      TerminalConnection later, in VtIo::StartIfNeeded
-        _stateMachine = std::make_shared<StateMachine>(new OutputStateMachineEngine(adapter.release()));
-        THROW_IF_NULL_ALLOC(_stateMachine.get());
+        _stateMachine = std::make_shared<StateMachine>(std::move(engine));
     }
     catch (...)
     {
@@ -349,7 +328,7 @@ bool SCREEN_INFORMATION::IsActiveScreenBuffer() const
     // the following macro returns TRUE if the given screen buffer is the active screen buffer.
 
     //#define ACTIVE_SCREEN_BUFFER(SCREEN_INFO) (gci.CurrentScreenBuffer == SCREEN_INFO)
-    const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
     return (gci.pCurrentScreenBuffer == this);
 }
 
@@ -364,26 +343,29 @@ bool SCREEN_INFORMATION::IsActiveScreenBuffer() const
 // - MaximumWindowSize - Pointer to location in which to store maximum window size.
 // Return Value:
 // - None
-void SCREEN_INFORMATION::GetScreenBufferInformation(_Out_ PCOORD pcoordSize,
-                                                    _Out_ PCOORD pcoordCursorPosition,
-                                                    _Out_ PSMALL_RECT psrWindow,
+void SCREEN_INFORMATION::GetScreenBufferInformation(_Out_ til::size* pcoordSize,
+                                                    _Out_ til::point* pcoordCursorPosition,
+                                                    _Out_ til::inclusive_rect* psrWindow,
                                                     _Out_ PWORD pwAttributes,
-                                                    _Out_ PCOORD pcoordMaximumWindowSize,
+                                                    _Out_ til::size* pcoordMaximumWindowSize,
                                                     _Out_ PWORD pwPopupAttributes,
                                                     _Out_writes_(COLOR_TABLE_SIZE) LPCOLORREF lpColorTable) const
 {
-    const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
     *pcoordSize = GetBufferSize().Dimensions();
 
     *pcoordCursorPosition = _textBuffer->GetCursor().GetPosition();
 
     *psrWindow = _viewport.ToInclusive();
 
-    *pwAttributes = gci.GenerateLegacyAttributes(GetAttributes());
-    *pwPopupAttributes = gci.GenerateLegacyAttributes(_PopupAttributes);
+    *pwAttributes = GetAttributes().GetLegacyAttributes();
+    *pwPopupAttributes = _PopupAttributes.GetLegacyAttributes();
 
     // the copy length must be constant for now to keep OACR happy with buffer overruns.
-    memmove(lpColorTable, gci.GetColorTable(), COLOR_TABLE_SIZE * sizeof(COLORREF));
+    for (size_t i = 0; i < COLOR_TABLE_SIZE; i++)
+    {
+        lpColorTable[i] = gci.GetLegacyColorTableEntry(i);
+    }
 
     *pcoordMaximumWindowSize = GetMaxWindowSizeInCharacters();
 }
@@ -393,22 +375,22 @@ void SCREEN_INFORMATION::GetScreenBufferInformation(_Out_ PCOORD pcoordSize,
 // Arguments:
 // - coordFontSize - The font size to use for calculation if a screen buffer is not yet attached.
 // Return Value:
-// - COORD containing the width and height representing the minimum character grid that can be rendered in the window.
-COORD SCREEN_INFORMATION::GetMinWindowSizeInCharacters(const COORD coordFontSize /*= { 1, 1 }*/) const
+// - til::size containing the width and height representing the minimum character grid that can be rendered in the window.
+til::size SCREEN_INFORMATION::GetMinWindowSizeInCharacters(const til::size coordFontSize /*= { 1, 1 }*/) const
 {
-    FAIL_FAST_IF(coordFontSize.X == 0);
-    FAIL_FAST_IF(coordFontSize.Y == 0);
+    FAIL_FAST_IF(coordFontSize.width == 0);
+    FAIL_FAST_IF(coordFontSize.height == 0);
 
     // prepare rectangle
-    RECT const rcWindowInPixels = _pConsoleWindowMetrics->GetMinClientRectInPixels();
+    const auto rcWindowInPixels = _pConsoleWindowMetrics->GetMinClientRectInPixels();
 
     // assign the pixel widths and heights to the final output
-    COORD coordClientAreaSize;
-    coordClientAreaSize.X = (SHORT)RECT_WIDTH(&rcWindowInPixels);
-    coordClientAreaSize.Y = (SHORT)RECT_HEIGHT(&rcWindowInPixels);
+    til::size coordClientAreaSize;
+    coordClientAreaSize.width = rcWindowInPixels.width();
+    coordClientAreaSize.height = rcWindowInPixels.height();
 
     // now retrieve the font size and divide the pixel counts into character counts
-    COORD coordFont = coordFontSize; // by default, use the size we were given
+    auto coordFont = coordFontSize; // by default, use the size we were given
 
     // If text info has been set up, instead retrieve its font size
     if (_textBuffer != nullptr)
@@ -416,11 +398,11 @@ COORD SCREEN_INFORMATION::GetMinWindowSizeInCharacters(const COORD coordFontSize
         coordFont = GetScreenFontSize();
     }
 
-    FAIL_FAST_IF(coordFont.X == 0);
-    FAIL_FAST_IF(coordFont.Y == 0);
+    FAIL_FAST_IF(coordFont.width == 0);
+    FAIL_FAST_IF(coordFont.height == 0);
 
-    coordClientAreaSize.X /= coordFont.X;
-    coordClientAreaSize.Y /= coordFont.Y;
+    coordClientAreaSize.width /= coordFont.width;
+    coordClientAreaSize.height /= coordFont.height;
 
     return coordClientAreaSize;
 }
@@ -431,15 +413,15 @@ COORD SCREEN_INFORMATION::GetMinWindowSizeInCharacters(const COORD coordFontSize
 // Arguments:
 // - coordFontSize - The font size to use for calculation if a screen buffer is not yet attached.
 // Return Value:
-// - COORD containing the width and height representing the largest character
+// - til::size containing the width and height representing the largest character
 //      grid that can be rendered on the current monitor and/or from the current buffer size.
-COORD SCREEN_INFORMATION::GetMaxWindowSizeInCharacters(const COORD coordFontSize /*= { 1, 1 }*/) const
+til::size SCREEN_INFORMATION::GetMaxWindowSizeInCharacters(const til::size coordFontSize /*= { 1, 1 }*/) const
 {
-    FAIL_FAST_IF(coordFontSize.X == 0);
-    FAIL_FAST_IF(coordFontSize.Y == 0);
+    FAIL_FAST_IF(coordFontSize.width == 0);
+    FAIL_FAST_IF(coordFontSize.height == 0);
 
-    const COORD coordScreenBufferSize = GetBufferSize().Dimensions();
-    COORD coordClientAreaSize = coordScreenBufferSize;
+    const auto coordScreenBufferSize = GetBufferSize().Dimensions();
+    auto coordClientAreaSize = coordScreenBufferSize;
 
     //  Important re: headless consoles on onecore (for telnetd, etc.)
     // GetConsoleScreenBufferInfoEx hits this to get the max size of the display.
@@ -447,11 +429,11 @@ COORD SCREEN_INFORMATION::GetMaxWindowSizeInCharacters(const COORD coordFontSize
     // In that case, we'll just return the buffer size as the "max" window size.
     if (!ServiceLocator::LocateGlobals().IsHeadless())
     {
-        const COORD coordWindowRestrictedSize = GetLargestWindowSizeInCharacters(coordFontSize);
+        const auto coordWindowRestrictedSize = GetLargestWindowSizeInCharacters(coordFontSize);
         // If the buffer is smaller than what the max window would allow, then the max client area can only be as big as the
         // buffer we have.
-        coordClientAreaSize.X = std::min(coordScreenBufferSize.X, coordWindowRestrictedSize.X);
-        coordClientAreaSize.Y = std::min(coordScreenBufferSize.Y, coordWindowRestrictedSize.Y);
+        coordClientAreaSize.width = std::min(coordScreenBufferSize.width, coordWindowRestrictedSize.width);
+        coordClientAreaSize.height = std::min(coordScreenBufferSize.height, coordWindowRestrictedSize.height);
     }
 
     return coordClientAreaSize;
@@ -463,22 +445,22 @@ COORD SCREEN_INFORMATION::GetMaxWindowSizeInCharacters(const COORD coordFontSize
 // Arguments:
 // - coordFontSize - The font size to use for calculation if a screen buffer is not yet attached.
 // Return Value:
-// - COORD containing the width and height representing the largest character
+// - til::size containing the width and height representing the largest character
 //      grid that can be rendered on the current monitor with the maximum size window.
-COORD SCREEN_INFORMATION::GetLargestWindowSizeInCharacters(const COORD coordFontSize /*= { 1, 1 }*/) const
+til::size SCREEN_INFORMATION::GetLargestWindowSizeInCharacters(const til::size coordFontSize /*= { 1, 1 }*/) const
 {
-    FAIL_FAST_IF(coordFontSize.X == 0);
-    FAIL_FAST_IF(coordFontSize.Y == 0);
+    FAIL_FAST_IF(coordFontSize.width == 0);
+    FAIL_FAST_IF(coordFontSize.height == 0);
 
-    RECT const rcClientInPixels = _pConsoleWindowMetrics->GetMaxClientRectInPixels();
+    const auto rcClientInPixels = _pConsoleWindowMetrics->GetMaxClientRectInPixels();
 
     // first assign the pixel widths and heights to the final output
-    COORD coordClientAreaSize;
-    coordClientAreaSize.X = (SHORT)RECT_WIDTH(&rcClientInPixels);
-    coordClientAreaSize.Y = (SHORT)RECT_HEIGHT(&rcClientInPixels);
+    til::size coordClientAreaSize;
+    coordClientAreaSize.width = rcClientInPixels.width();
+    coordClientAreaSize.height = rcClientInPixels.height();
 
     // now retrieve the font size and divide the pixel counts into character counts
-    COORD coordFont = coordFontSize; // by default, use the size we were given
+    auto coordFont = coordFontSize; // by default, use the size we were given
 
     // If renderer has been set up, instead retrieve its font size
     if (ServiceLocator::LocateGlobals().pRender != nullptr)
@@ -486,52 +468,52 @@ COORD SCREEN_INFORMATION::GetLargestWindowSizeInCharacters(const COORD coordFont
         coordFont = GetScreenFontSize();
     }
 
-    FAIL_FAST_IF(coordFont.X == 0);
-    FAIL_FAST_IF(coordFont.Y == 0);
+    FAIL_FAST_IF(coordFont.width == 0);
+    FAIL_FAST_IF(coordFont.height == 0);
 
-    coordClientAreaSize.X /= coordFont.X;
-    coordClientAreaSize.Y /= coordFont.Y;
+    coordClientAreaSize.width /= coordFont.width;
+    coordClientAreaSize.height /= coordFont.height;
 
     return coordClientAreaSize;
 }
 
-COORD SCREEN_INFORMATION::GetScrollBarSizesInCharacters() const
+til::size SCREEN_INFORMATION::GetScrollBarSizesInCharacters() const
 {
-    COORD coordFont = GetScreenFontSize();
+    auto coordFont = GetScreenFontSize();
 
-    SHORT vScrollSize = ServiceLocator::LocateGlobals().sVerticalScrollSize;
-    SHORT hScrollSize = ServiceLocator::LocateGlobals().sHorizontalScrollSize;
+    auto vScrollSize = ServiceLocator::LocateGlobals().sVerticalScrollSize;
+    auto hScrollSize = ServiceLocator::LocateGlobals().sHorizontalScrollSize;
 
-    COORD coordBarSizes;
-    coordBarSizes.X = (vScrollSize / coordFont.X) + ((vScrollSize % coordFont.X) != 0 ? 1 : 0);
-    coordBarSizes.Y = (hScrollSize / coordFont.Y) + ((hScrollSize % coordFont.Y) != 0 ? 1 : 0);
+    til::size coordBarSizes;
+    coordBarSizes.width = (vScrollSize / coordFont.width) + ((vScrollSize % coordFont.width) != 0 ? 1 : 0);
+    coordBarSizes.height = (hScrollSize / coordFont.height) + ((hScrollSize % coordFont.height) != 0 ? 1 : 0);
 
     return coordBarSizes;
 }
 
-void SCREEN_INFORMATION::GetRequiredConsoleSizeInPixels(_Out_ PSIZE const pRequiredSize) const
+void SCREEN_INFORMATION::GetRequiredConsoleSizeInPixels(_Out_ til::size* const pRequiredSize) const
 {
-    COORD const coordFontSize = GetCurrentFont().GetSize();
+    const auto coordFontSize = GetCurrentFont().GetSize();
 
     // TODO: Assert valid size boundaries
-    pRequiredSize->cx = GetViewport().Width() * coordFontSize.X;
-    pRequiredSize->cy = GetViewport().Height() * coordFontSize.Y;
+    pRequiredSize->width = GetViewport().Width() * coordFontSize.width;
+    pRequiredSize->height = GetViewport().Height() * coordFontSize.height;
 }
 
-COORD SCREEN_INFORMATION::GetScreenFontSize() const
+til::size SCREEN_INFORMATION::GetScreenFontSize() const
 {
     // If we have no renderer, then we don't really need any sort of pixel math. so the "font size" for the scale factor
     // (which is used almost everywhere around the code as * and / calls) should just be 1,1 so those operations will do
     // effectively nothing.
-    COORD coordRet = { 1, 1 };
+    til::size coordRet = { 1, 1 };
     if (ServiceLocator::LocateGlobals().pRender != nullptr)
     {
         coordRet = GetCurrentFont().GetSize();
     }
 
     // For sanity's sake, make sure not to leak 0 out as a possible value. These values are used in division operations.
-    coordRet.X = std::max(coordRet.X, 1i16);
-    coordRet.Y = std::max(coordRet.Y, 1i16);
+    coordRet.width = std::max(coordRet.width, 1);
+    coordRet.height = std::max(coordRet.height, 1);
 
     return coordRet;
 }
@@ -568,10 +550,10 @@ void SCREEN_INFORMATION::UpdateFont(const FontInfo* const pfiNewFont)
     if (IsActiveScreenBuffer())
     {
         // If there is a window attached, let it know that it should try to update so the rows/columns are now accounting for the new font.
-        IConsoleWindow* const pWindow = ServiceLocator::LocateConsoleWindow();
+        const auto pWindow = ServiceLocator::LocateConsoleWindow();
         if (nullptr != pWindow)
         {
-            COORD coordViewport = GetViewport().Dimensions();
+            auto coordViewport = GetViewport().Dimensions();
             pWindow->UpdateWindowSize(coordViewport);
         }
     }
@@ -583,30 +565,46 @@ void SCREEN_INFORMATION::UpdateFont(const FontInfo* const pfiNewFont)
     }
 }
 
+// Routine Description:
+// - Informs clients whether we have accessibility eventing so they can
+//   save themselves the work of performing math or lookups before calling
+//   `NotifyAccessibilityEventing`.
+// Arguments:
+// - <none>
+// Return Value:
+// - True if we have an accessibility listener. False otherwise.
+bool SCREEN_INFORMATION::HasAccessibilityEventing() const noexcept
+{
+    return _pAccessibilityNotifier;
+}
+
 // NOTE: This method was historically used to notify accessibility apps AND
 // to aggregate drawing metadata to determine whether or not to use PolyTextOut.
 // After the Nov 2015 graphics refactor, the metadata drawing flag calculation is no longer necessary.
 // This now only notifies accessibility apps of a change.
-void SCREEN_INFORMATION::NotifyAccessibilityEventing(const short sStartX,
-                                                     const short sStartY,
-                                                     const short sEndX,
-                                                     const short sEndY)
+void SCREEN_INFORMATION::NotifyAccessibilityEventing(const til::CoordType sStartX,
+                                                     const til::CoordType sStartY,
+                                                     const til::CoordType sEndX,
+                                                     const til::CoordType sEndY)
 {
-    const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    if (!_pAccessibilityNotifier)
+    {
+        return;
+    }
 
     // Fire off a winevent to let accessibility apps know what changed.
     if (IsActiveScreenBuffer())
     {
-        const COORD coordScreenBufferSize = GetBufferSize().Dimensions();
-        FAIL_FAST_IF(!(sEndX < coordScreenBufferSize.X));
+        const auto coordScreenBufferSize = GetBufferSize().Dimensions();
+        FAIL_FAST_IF(!(sEndX < coordScreenBufferSize.width));
 
         if (sStartX == sEndX && sStartY == sEndY)
         {
             try
             {
                 const auto cellData = GetCellDataAt({ sStartX, sStartY });
-                const LONG charAndAttr = MAKELONG(Utf16ToUcs2(cellData->Chars()),
-                                                  gci.GenerateLegacyAttributes(cellData->TextAttr()));
+                const auto charAndAttr = MAKELONG(Utf16ToUcs2(cellData->Chars()),
+                                                  cellData->TextAttr().GetLegacyAttributes());
                 _pAccessibilityNotifier->NotifyConsoleUpdateSimpleEvent(MAKELONG(sStartX, sStartY),
                                                                         charAndAttr);
             }
@@ -621,7 +619,7 @@ void SCREEN_INFORMATION::NotifyAccessibilityEventing(const short sStartX,
             _pAccessibilityNotifier->NotifyConsoleUpdateRegionEvent(MAKELONG(sStartX, sStartY),
                                                                     MAKELONG(sEndX, sEndY));
         }
-        IConsoleWindow* pConsoleWindow = ServiceLocator::LocateConsoleWindow();
+        auto pConsoleWindow = ServiceLocator::LocateConsoleWindow();
         if (pConsoleWindow)
         {
             LOG_IF_FAILED(pConsoleWindow->SignalUia(UIA_Text_TextChangedEventId));
@@ -637,7 +635,7 @@ void SCREEN_INFORMATION::NotifyAccessibilityEventing(const short sStartX,
 
 VOID SCREEN_INFORMATION::UpdateScrollBars()
 {
-    CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
     if (!IsActiveScreenBuffer())
     {
         return;
@@ -658,8 +656,8 @@ VOID SCREEN_INFORMATION::UpdateScrollBars()
 
 VOID SCREEN_INFORMATION::InternalUpdateScrollBars()
 {
-    CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-    IConsoleWindow* const pWindow = ServiceLocator::LocateConsoleWindow();
+    auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    const auto pWindow = ServiceLocator::LocateConsoleWindow();
 
     WI_ClearFlag(gci.Flags, CONSOLE_UPDATING_SCROLL_BARS);
 
@@ -683,7 +681,7 @@ VOID SCREEN_INFORMATION::InternalUpdateScrollBars()
         }
 
         pWindow->UpdateScrollBar(true,
-                                 _IsAltBuffer() || gci.IsTerminalScrolling(),
+                                 _IsAltBuffer(),
                                  _viewport.Height(),
                                  gci.IsTerminalScrolling() ? _virtualBottom : buffer.BottomInclusive(),
                                  _viewport.Top());
@@ -695,7 +693,10 @@ VOID SCREEN_INFORMATION::InternalUpdateScrollBars()
     }
 
     // Fire off an event to let accessibility apps know the layout has changed.
-    _pAccessibilityNotifier->NotifyConsoleLayoutEvent();
+    if (_pAccessibilityNotifier)
+    {
+        _pAccessibilityNotifier->NotifyConsoleLayoutEvent();
+    }
 
     ResizingWindow--;
 }
@@ -707,7 +708,7 @@ VOID SCREEN_INFORMATION::InternalUpdateScrollBars()
 // - pcoordSize - Requested viewport width/heights in characters
 // Return Value:
 // - <none>
-void SCREEN_INFORMATION::SetViewportSize(const COORD* const pcoordSize)
+void SCREEN_INFORMATION::SetViewportSize(const til::size* const pcoordSize)
 {
     // If this is the alt buffer or a VT I/O buffer:
     //      first resize ourselves to match the new viewport
@@ -719,9 +720,8 @@ void SCREEN_INFORMATION::SetViewportSize(const COORD* const pcoordSize)
 
         if (_psiMainBuffer)
         {
-            const auto bufferSize = GetBufferSize().Dimensions();
-
-            _psiMainBuffer->SetViewportSize(&bufferSize);
+            _psiMainBuffer->_fAltWindowChanged = false;
+            _psiMainBuffer->_deferredPtyResize = GetBufferSize().Dimensions();
         }
     }
     _InternalSetViewportSize(pcoordSize, false, false);
@@ -746,22 +746,22 @@ void SCREEN_INFORMATION::SetViewportSize(const COORD* const pcoordSize)
 // - STATUS_INVALID_PARAMETER if the new viewport would be outside the buffer,
 //      else STATUS_SUCCESS
 [[nodiscard]] NTSTATUS SCREEN_INFORMATION::SetViewportOrigin(const bool fAbsolute,
-                                                             const COORD coordWindowOrigin,
+                                                             const til::point coordWindowOrigin,
                                                              const bool updateBottom)
 {
     // calculate window size
-    COORD WindowSize = _viewport.Dimensions();
+    auto WindowSize = _viewport.Dimensions();
 
-    SMALL_RECT NewWindow;
+    til::inclusive_rect NewWindow;
     // if relative coordinates, figure out absolute coords.
     if (!fAbsolute)
     {
-        if (coordWindowOrigin.X == 0 && coordWindowOrigin.Y == 0)
+        if (coordWindowOrigin.x == 0 && coordWindowOrigin.y == 0)
         {
             return STATUS_SUCCESS;
         }
-        NewWindow.Left = _viewport.Left() + coordWindowOrigin.X;
-        NewWindow.Top = _viewport.Top() + coordWindowOrigin.Y;
+        NewWindow.left = _viewport.Left() + coordWindowOrigin.x;
+        NewWindow.top = _viewport.Top() + coordWindowOrigin.y;
     }
     else
     {
@@ -769,33 +769,33 @@ void SCREEN_INFORMATION::SetViewportSize(const COORD* const pcoordSize)
         {
             return STATUS_SUCCESS;
         }
-        NewWindow.Left = coordWindowOrigin.X;
-        NewWindow.Top = coordWindowOrigin.Y;
+        NewWindow.left = coordWindowOrigin.x;
+        NewWindow.top = coordWindowOrigin.y;
     }
-    NewWindow.Right = (SHORT)(NewWindow.Left + WindowSize.X - 1);
-    NewWindow.Bottom = (SHORT)(NewWindow.Top + WindowSize.Y - 1);
+    NewWindow.right = NewWindow.left + WindowSize.width - 1;
+    NewWindow.bottom = NewWindow.top + WindowSize.height - 1;
 
-    const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
 
-    // If we're in terminal scrolling mode, and we're rying to set the viewport
+    // If we're in terminal scrolling mode, and we're trying to set the viewport
     //      below the logical viewport, without updating our virtual bottom
     //      (the logical viewport's position), dont.
     //  Instead move us to the bottom of the logical viewport.
-    if (gci.IsTerminalScrolling() && !updateBottom && NewWindow.Bottom > _virtualBottom)
+    if (gci.IsTerminalScrolling() && !updateBottom && NewWindow.bottom > _virtualBottom)
     {
-        const short delta = _virtualBottom - NewWindow.Bottom;
-        NewWindow.Top += delta;
-        NewWindow.Bottom += delta;
+        const auto delta = _virtualBottom - NewWindow.bottom;
+        NewWindow.top += delta;
+        NewWindow.bottom += delta;
     }
 
     // see if new window origin would extend window beyond extent of screen buffer
-    const COORD coordScreenBufferSize = GetBufferSize().Dimensions();
-    if (NewWindow.Left < 0 ||
-        NewWindow.Top < 0 ||
-        NewWindow.Right < 0 ||
-        NewWindow.Bottom < 0 ||
-        NewWindow.Right >= coordScreenBufferSize.X ||
-        NewWindow.Bottom >= coordScreenBufferSize.Y)
+    const auto coordScreenBufferSize = GetBufferSize().Dimensions();
+    if (NewWindow.left < 0 ||
+        NewWindow.top < 0 ||
+        NewWindow.right < 0 ||
+        NewWindow.bottom < 0 ||
+        NewWindow.right >= coordScreenBufferSize.width ||
+        NewWindow.bottom >= coordScreenBufferSize.height)
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -815,7 +815,10 @@ void SCREEN_INFORMATION::SetViewportSize(const COORD* const pcoordSize)
     // Update our internal virtual bottom tracker if requested. This helps keep
     //      the viewport's logical position consistent from the perspective of a
     //      VT client application, even if the user scrolls the viewport with the mouse.
-    if (updateBottom)
+    //      We typically only want to this to move the virtual bottom down, though,
+    //      otherwise it can end up "truncating" the buffer if the user is viewing
+    //      the scrollback at the time the viewport origin is updated.
+    if (updateBottom && _virtualBottom < _viewport.BottomInclusive())
     {
         UpdateBottom();
     }
@@ -856,8 +859,8 @@ bool SCREEN_INFORMATION::PostUpdateWindowSize() const
 // - prcClientOld - Client rectangle in pixels before this update
 // Return Value:
 // - <none>
-void SCREEN_INFORMATION::ProcessResizeWindow(const RECT* const prcClientNew,
-                                             const RECT* const prcClientOld)
+void SCREEN_INFORMATION::ProcessResizeWindow(const til::rect* const prcClientNew,
+                                             const til::rect* const prcClientOld)
 {
     if (_IsAltBuffer())
     {
@@ -874,11 +877,11 @@ void SCREEN_INFORMATION::ProcessResizeWindow(const RECT* const prcClientNew,
     //      return S_OK instead of S_FALSE. In that case, we'll need to re-show
     //      the commandline ourselves once the viewport size is updated.
     //      (See 1.b below)
-    const HRESULT adjustBufferSizeResult = _AdjustScreenBuffer(prcClientNew);
+    const auto adjustBufferSizeResult = _AdjustScreenBuffer(prcClientNew);
     LOG_IF_FAILED(adjustBufferSizeResult);
 
     // 2. Now calculate how large the new viewport should be
-    COORD coordViewportSize;
+    til::size coordViewportSize;
     _CalculateViewportSize(prcClientNew, &coordViewportSize);
 
     // 3. And adjust the existing viewport to match the same dimensions.
@@ -891,7 +894,7 @@ void SCREEN_INFORMATION::ProcessResizeWindow(const RECT* const prcClientNew,
     //      size. See MSFT:19976291
     if (SUCCEEDED(adjustBufferSizeResult) && adjustBufferSizeResult != S_FALSE)
     {
-        CommandLine& commandLine = CommandLine::Instance();
+        auto& commandLine = CommandLine::Instance();
         commandLine.Show();
     }
 
@@ -916,43 +919,42 @@ void SCREEN_INFORMATION::ProcessResizeWindow(const RECT* const prcClientNew,
 // - pcoordClientNewCharacters - The maximum number of characters X by Y that can be displayed in the window with the given backing buffer.
 // Return Value:
 // - S_OK if math was successful. Check with SUCCEEDED/FAILED macro.
-[[nodiscard]] HRESULT SCREEN_INFORMATION::_AdjustScreenBufferHelper(const RECT* const prcClientNew,
-                                                                    const COORD coordBufferOld,
-                                                                    _Out_ COORD* const pcoordClientNewCharacters)
+[[nodiscard]] HRESULT SCREEN_INFORMATION::_AdjustScreenBufferHelper(const til::rect* const prcClientNew,
+                                                                    const til::size coordBufferOld,
+                                                                    _Out_ til::size* const pcoordClientNewCharacters)
 {
     // Get the font size ready.
-    COORD const coordFontSize = GetScreenFontSize();
+    const auto coordFontSize = GetScreenFontSize();
 
     // We cannot operate if the font size is 0. This shouldn't happen, but stop early if it does.
-    RETURN_HR_IF(E_NOT_VALID_STATE, 0 == coordFontSize.X || 0 == coordFontSize.Y);
+    RETURN_HR_IF(E_NOT_VALID_STATE, 0 == coordFontSize.width || 0 == coordFontSize.height);
 
     // Find out how much client space we have to work with in the new area.
-    SIZE sizeClientNewPixels = { 0 };
-    sizeClientNewPixels.cx = RECT_WIDTH(prcClientNew);
-    sizeClientNewPixels.cy = RECT_HEIGHT(prcClientNew);
+    til::size sizeClientNewPixels;
+    sizeClientNewPixels.width = prcClientNew->width();
+    sizeClientNewPixels.height = prcClientNew->height();
 
     // Subtract out scroll bar space if scroll bars will be necessary.
-    bool fIsHorizontalVisible = false;
-    bool fIsVerticalVisible = false;
+    auto fIsHorizontalVisible = false;
+    auto fIsVerticalVisible = false;
     s_CalculateScrollbarVisibility(prcClientNew, &coordBufferOld, &coordFontSize, &fIsHorizontalVisible, &fIsVerticalVisible);
 
     if (fIsHorizontalVisible)
     {
-        sizeClientNewPixels.cy -= ServiceLocator::LocateGlobals().sHorizontalScrollSize;
+        sizeClientNewPixels.height -= ServiceLocator::LocateGlobals().sHorizontalScrollSize;
     }
 
     if (fIsVerticalVisible)
     {
-        sizeClientNewPixels.cx -= ServiceLocator::LocateGlobals().sVerticalScrollSize;
+        sizeClientNewPixels.width -= ServiceLocator::LocateGlobals().sVerticalScrollSize;
     }
 
     // Now with the scroll bars removed, calculate how many characters could fit into the new window area.
-    pcoordClientNewCharacters->X = (SHORT)(sizeClientNewPixels.cx / coordFontSize.X);
-    pcoordClientNewCharacters->Y = (SHORT)(sizeClientNewPixels.cy / coordFontSize.Y);
+    *pcoordClientNewCharacters = sizeClientNewPixels / coordFontSize;
 
     // If the new client is too tiny, our viewport will be 1x1.
-    pcoordClientNewCharacters->X = std::max(pcoordClientNewCharacters->X, 1i16);
-    pcoordClientNewCharacters->Y = std::max(pcoordClientNewCharacters->Y, 1i16);
+    pcoordClientNewCharacters->width = std::max(pcoordClientNewCharacters->width, 1);
+    pcoordClientNewCharacters->height = std::max(pcoordClientNewCharacters->height, 1);
     return S_OK;
 }
 
@@ -964,16 +966,16 @@ void SCREEN_INFORMATION::ProcessResizeWindow(const RECT* const prcClientNew,
 // - prcClientNew - Client rectangle in pixels after this update
 // Return Value:
 // - appropriate HRESULT
-[[nodiscard]] HRESULT SCREEN_INFORMATION::_AdjustScreenBuffer(const RECT* const prcClientNew)
+[[nodiscard]] HRESULT SCREEN_INFORMATION::_AdjustScreenBuffer(const til::rect* const prcClientNew)
 {
-    const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
     // Prepare the buffer sizes.
     // We need the main's size here to maintain the right scrollbar visibility.
-    COORD const coordBufferSizeOld = _IsAltBuffer() ? _psiMainBuffer->GetBufferSize().Dimensions() : GetBufferSize().Dimensions();
-    COORD coordBufferSizeNew = coordBufferSizeOld;
+    const auto coordBufferSizeOld = _IsAltBuffer() ? _psiMainBuffer->GetBufferSize().Dimensions() : GetBufferSize().Dimensions();
+    auto coordBufferSizeNew = coordBufferSizeOld;
 
     // First figure out how many characters we could fit into the new window given the old buffer size
-    COORD coordClientNewCharacters;
+    til::size coordClientNewCharacters;
 
     RETURN_IF_FAILED(_AdjustScreenBufferHelper(prcClientNew, coordBufferSizeOld, &coordClientNewCharacters));
 
@@ -981,7 +983,7 @@ void SCREEN_INFORMATION::ProcessResizeWindow(const RECT* const prcClientNew,
     // to fix the buffer and window width together.
     if (gci.GetWrapText())
     {
-        coordBufferSizeNew.X = coordClientNewCharacters.X;
+        coordBufferSizeNew.width = coordClientNewCharacters.width;
     }
 
     // Reanalyze scroll bars in case we fixed the edge together for word wrap.
@@ -994,32 +996,33 @@ void SCREEN_INFORMATION::ProcessResizeWindow(const RECT* const prcClientNew,
         // The alt buffer always wants to be exactly the size of the screen, never more or less.
         // This prevents scrollbars when you increase the alt buffer size, then decrease it.
         // Can't have a buffer dimension of 0 - that'll cause divide by zeros in the future.
-        coordBufferSizeNew.X = std::max(coordClientNewCharacters.X, 1i16);
-        coordBufferSizeNew.Y = std::max(coordClientNewCharacters.Y, 1i16);
+        coordBufferSizeNew.width = std::max(coordClientNewCharacters.width, 1);
+        coordBufferSizeNew.height = std::max(coordClientNewCharacters.height, 1);
     }
     else
     {
-        if (coordClientNewCharacters.X > coordBufferSizeNew.X)
+        if (coordClientNewCharacters.width > coordBufferSizeNew.width)
         {
-            coordBufferSizeNew.X = coordClientNewCharacters.X;
+            coordBufferSizeNew.width = coordClientNewCharacters.width;
         }
-        if (coordClientNewCharacters.Y > coordBufferSizeNew.Y)
+        if (coordClientNewCharacters.height > coordBufferSizeNew.height)
         {
-            coordBufferSizeNew.Y = coordClientNewCharacters.Y;
+            coordBufferSizeNew.height = coordClientNewCharacters.height;
         }
     }
 
-    HRESULT hr = S_FALSE;
+    auto hr = S_FALSE;
 
     // Only attempt to modify the buffer if something changed. Expensive operation.
-    if (coordBufferSizeOld.X != coordBufferSizeNew.X ||
-        coordBufferSizeOld.Y != coordBufferSizeNew.Y)
+    if (coordBufferSizeOld != coordBufferSizeNew)
     {
-        CommandLine& commandLine = CommandLine::Instance();
+        auto& commandLine = CommandLine::Instance();
 
         // TODO: Deleting and redrawing the command line during resizing can cause flickering. See: http://osgvsowi/658439
         // 1. Delete input string if necessary (see menu.c)
         commandLine.Hide(FALSE);
+
+        const auto savedCursorVisibility = _textBuffer->GetCursor().IsVisible();
         _textBuffer->GetCursor().SetIsVisible(false);
 
         // 2. Call the resize screen buffer method (expensive) to redimension the backing buffer (and reflow)
@@ -1028,7 +1031,7 @@ void SCREEN_INFORMATION::ProcessResizeWindow(const RECT* const prcClientNew,
         // MSFT:19976291 Don't re-show the commandline here. We need to wait for
         //      the viewport to also get resized before we can re-show the commandline.
         //      ProcessResizeWindow will call commandline.Show() for us.
-        _textBuffer->GetCursor().SetIsVisible(true);
+        _textBuffer->GetCursor().SetIsVisible(savedCursorVisibility);
 
         // Return S_OK, to indicate we succeeded and actually did something.
         hr = S_OK;
@@ -1045,14 +1048,14 @@ void SCREEN_INFORMATION::ProcessResizeWindow(const RECT* const prcClientNew,
 // - pcoordSize - Filled with the width/height to which the viewport should be set.
 // Return Value:
 // - <none>
-void SCREEN_INFORMATION::_CalculateViewportSize(const RECT* const prcClientArea, _Out_ COORD* const pcoordSize)
+void SCREEN_INFORMATION::_CalculateViewportSize(const til::rect* const prcClientArea, _Out_ til::size* const pcoordSize)
 {
-    COORD const coordBufferSize = GetBufferSize().Dimensions();
-    COORD const coordFontSize = GetScreenFontSize();
+    const auto coordBufferSize = GetBufferSize().Dimensions();
+    const auto coordFontSize = GetScreenFontSize();
 
-    SIZE sizeClientPixels = { 0 };
-    sizeClientPixels.cx = RECT_WIDTH(prcClientArea);
-    sizeClientPixels.cy = RECT_HEIGHT(prcClientArea);
+    til::size sizeClientPixels;
+    sizeClientPixels.width = prcClientArea->width();
+    sizeClientPixels.height = prcClientArea->height();
 
     bool fIsHorizontalVisible;
     bool fIsVerticalVisible;
@@ -1064,16 +1067,16 @@ void SCREEN_INFORMATION::_CalculateViewportSize(const RECT* const prcClientArea,
 
     if (fIsHorizontalVisible)
     {
-        sizeClientPixels.cy -= ServiceLocator::LocateGlobals().sHorizontalScrollSize;
+        sizeClientPixels.height -= ServiceLocator::LocateGlobals().sHorizontalScrollSize;
     }
 
     if (fIsVerticalVisible)
     {
-        sizeClientPixels.cx -= ServiceLocator::LocateGlobals().sVerticalScrollSize;
+        sizeClientPixels.width -= ServiceLocator::LocateGlobals().sVerticalScrollSize;
     }
 
-    pcoordSize->X = (SHORT)(sizeClientPixels.cx / coordFontSize.X);
-    pcoordSize->Y = (SHORT)(sizeClientPixels.cy / coordFontSize.Y);
+    pcoordSize->width = (til::CoordType)(sizeClientPixels.width / coordFontSize.width);
+    pcoordSize->height = (til::CoordType)(sizeClientPixels.height / coordFontSize.height);
 }
 
 // Routine Description:
@@ -1085,55 +1088,55 @@ void SCREEN_INFORMATION::_CalculateViewportSize(const RECT* const prcClientArea,
 // - fResizeFromBottom - If false, will trim/add to top of viewport first. If true, will trim/add to left.
 // Return Value:
 // - <none>
-void SCREEN_INFORMATION::_InternalSetViewportSize(const COORD* const pcoordSize,
+void SCREEN_INFORMATION::_InternalSetViewportSize(const til::size* const pcoordSize,
                                                   const bool fResizeFromTop,
                                                   const bool fResizeFromLeft)
 {
-    const short DeltaX = pcoordSize->X - _viewport.Width();
-    const short DeltaY = pcoordSize->Y - _viewport.Height();
-    const COORD coordScreenBufferSize = GetBufferSize().Dimensions();
+    const auto DeltaX = pcoordSize->width - _viewport.Width();
+    const auto DeltaY = pcoordSize->height - _viewport.Height();
+    const auto coordScreenBufferSize = GetBufferSize().Dimensions();
 
     // do adjustments on a copy that's easily manipulated.
-    SMALL_RECT srNewViewport = _viewport.ToInclusive();
+    auto srNewViewport = _viewport.ToInclusive();
 
     // Now we need to determine what our new Window size should
     // be. Note that Window here refers to the character/row window.
     if (fResizeFromLeft)
     {
         // we're being horizontally sized from the left border
-        const SHORT sLeftProposed = (srNewViewport.Left - DeltaX);
+        const auto sLeftProposed = srNewViewport.left - DeltaX;
         if (sLeftProposed >= 0)
         {
             // there's enough room in the backlog to just expand left
-            srNewViewport.Left -= DeltaX;
+            srNewViewport.left -= DeltaX;
         }
         else
         {
             // if we're resizing horizontally, we want to show as much
             // content above as we can, but we can't show more
             // than the left of the window
-            srNewViewport.Left = 0;
-            srNewViewport.Right += (SHORT)abs(sLeftProposed);
+            srNewViewport.left = 0;
+            srNewViewport.right += abs(sLeftProposed);
         }
     }
     else
     {
         // we're being horizontally sized from the right border
-        const SHORT sRightProposed = (srNewViewport.Right + DeltaX);
-        if (sRightProposed <= (coordScreenBufferSize.X - 1))
+        const auto sRightProposed = (srNewViewport.right + DeltaX);
+        if (sRightProposed <= (coordScreenBufferSize.width - 1))
         {
-            srNewViewport.Right += DeltaX;
+            srNewViewport.right += DeltaX;
         }
         else
         {
-            srNewViewport.Right = (coordScreenBufferSize.X - 1);
-            srNewViewport.Left -= (sRightProposed - (coordScreenBufferSize.X - 1));
+            srNewViewport.right = (coordScreenBufferSize.width - 1);
+            srNewViewport.left -= (sRightProposed - (coordScreenBufferSize.width - 1));
         }
     }
 
     if (fResizeFromTop)
     {
-        const SHORT sTopProposed = (srNewViewport.Top - DeltaY);
+        const auto sTopProposed = (srNewViewport.top - DeltaY);
         // we're being vertically sized from the top border
         if (sTopProposed >= 0)
         {
@@ -1143,10 +1146,10 @@ void SCREEN_INFORMATION::_InternalSetViewportSize(const COORD* const pcoordSize,
             // If we're on the 0th row, people expect it to stay stuck
             // to the top of the window, not to start collapsing down
             // and hiding the top rows.
-            if (srNewViewport.Top > 0)
+            if (srNewViewport.top > 0)
             {
                 // there's enough room in the backlog to just expand the top
-                srNewViewport.Top -= DeltaY;
+                srNewViewport.top -= DeltaY;
             }
             else
             {
@@ -1155,7 +1158,7 @@ void SCREEN_INFORMATION::_InternalSetViewportSize(const COORD* const pcoordSize,
                 // NOTE: It's += because DeltaY will be negative
                 // already for this circumstance.
                 FAIL_FAST_IF(!(DeltaY <= 0));
-                srNewViewport.Bottom += DeltaY;
+                srNewViewport.bottom += DeltaY;
             }
         }
         else
@@ -1163,15 +1166,15 @@ void SCREEN_INFORMATION::_InternalSetViewportSize(const COORD* const pcoordSize,
             // if we're resizing vertically, we want to show as much
             // content above as we can, but we can't show more
             // than the top of the window
-            srNewViewport.Top = 0;
-            srNewViewport.Bottom += (SHORT)abs(sTopProposed);
+            srNewViewport.top = 0;
+            srNewViewport.bottom += abs(sTopProposed);
         }
     }
     else
     {
         // we're being vertically sized from the bottom border
-        const SHORT sBottomProposed = (srNewViewport.Bottom + DeltaY);
-        if (sBottomProposed <= (coordScreenBufferSize.Y - 1))
+        const auto sBottomProposed = (srNewViewport.bottom + DeltaY);
+        if (sBottomProposed <= (coordScreenBufferSize.height - 1))
         {
             // If the new bottom is supposed to be before the final line of the buffer
             // Check to ensure that we don't hide the prompt by collapsing the window.
@@ -1179,79 +1182,92 @@ void SCREEN_INFORMATION::_InternalSetViewportSize(const COORD* const pcoordSize,
             // The final valid end position will be the coordinates of
             // the last character displayed (including any characters
             // in the input line)
-            COORD coordValidEnd;
+            til::point coordValidEnd;
             Selection::Instance().GetValidAreaBoundaries(nullptr, &coordValidEnd);
 
             // If the bottom of the window when adjusted would be
             // above the final line of valid text...
-            if (srNewViewport.Bottom + DeltaY < coordValidEnd.Y)
+            if (srNewViewport.bottom + DeltaY < coordValidEnd.y)
             {
                 // Adjust the top of the window instead of the bottom
                 // (so the lines slide upward)
-                srNewViewport.Top -= DeltaY;
-
-                // If we happened to move the top of the window past
-                // the 0th row (first row in the buffer)
-                if (srNewViewport.Top < 0)
-                {
-                    // Find the amount we went past 0, correct the top
-                    // of the window back to 0, and instead adjust the
-                    // bottom even though it will cause us to lose the
-                    // prompt line.
-                    const short cRemainder = 0 - srNewViewport.Top;
-                    srNewViewport.Top += cRemainder;
-                    FAIL_FAST_IF(!(srNewViewport.Top == 0));
-                    srNewViewport.Bottom += cRemainder;
-                }
+                srNewViewport.top -= DeltaY;
             }
             else
             {
-                srNewViewport.Bottom += DeltaY;
+                srNewViewport.bottom += DeltaY;
             }
         }
         else
         {
-            srNewViewport.Bottom = (coordScreenBufferSize.Y - 1);
-            srNewViewport.Top -= (sBottomProposed - (coordScreenBufferSize.Y - 1));
+            srNewViewport.bottom = (coordScreenBufferSize.height - 1);
+            srNewViewport.top -= (sBottomProposed - (coordScreenBufferSize.height - 1));
         }
     }
 
     // Ensure the viewport is valid.
     // We can't have a negative left or top.
-    if (srNewViewport.Left < 0)
+    if (srNewViewport.left < 0)
     {
-        srNewViewport.Right -= srNewViewport.Left;
-        srNewViewport.Left = 0;
+        srNewViewport.right -= srNewViewport.left;
+        srNewViewport.left = 0;
     }
 
-    if (srNewViewport.Top < 0)
+    if (srNewViewport.top < 0)
     {
-        srNewViewport.Bottom -= srNewViewport.Top;
-        srNewViewport.Top = 0;
+        srNewViewport.bottom -= srNewViewport.top;
+        srNewViewport.top = 0;
     }
 
     // Bottom and right cannot pass the final characters in the array.
-    srNewViewport.Right = std::min(srNewViewport.Right, gsl::narrow<SHORT>(coordScreenBufferSize.X - 1));
-    srNewViewport.Bottom = std::min(srNewViewport.Bottom, gsl::narrow<SHORT>(coordScreenBufferSize.Y - 1));
-
-    // See MSFT:19917443
-    // If we're in terminal scrolling mode, and we've changed the height of the
-    //      viewport, the new viewport's bottom to the _virtualBottom.
-    // GH#1206 - Only do this if the viewport is _growing_ in height. This can
-    // cause unexpected behavior if we try to anchor the _virtualBottom to a
-    // position that will be greater than the height of the buffer.
-    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-    auto newViewport = Viewport::FromInclusive(srNewViewport);
-    if (gci.IsTerminalScrolling() && newViewport.Height() >= _viewport.Height())
+    const auto offRightDelta = srNewViewport.right - (coordScreenBufferSize.width - 1);
+    if (offRightDelta > 0) // the viewport was off the right of the buffer...
     {
-        const short newTop = static_cast<short>(std::max(0, _virtualBottom - (newViewport.Height() - 1)));
+        // ...so slide both left/right back into the buffer. This will prevent us
+        // from having a negative width later.
+        srNewViewport.right -= offRightDelta;
+        srNewViewport.left = std::max(0, srNewViewport.left - offRightDelta);
+    }
+    const auto offBottomDelta = srNewViewport.bottom - (coordScreenBufferSize.height - 1);
+    if (offBottomDelta > 0) // the viewport was off the right of the buffer...
+    {
+        // ...so slide both top/bottom back into the buffer. This will prevent us
+        // from having a negative width later.
+        srNewViewport.bottom -= offBottomDelta;
+        srNewViewport.top = std::max(0, srNewViewport.top - offBottomDelta);
+    }
 
-        newViewport = Viewport::FromDimensions(COORD({ newViewport.Left(), newTop }), newViewport.Dimensions());
+    // In general we want to avoid moving the virtual bottom unless it's aligned with
+    // the visible viewport, so we check whether the changes we're making would cause
+    // the bottom of the visible viewport to intersect the virtual bottom at any point.
+    // If so, we update the virtual bottom to match. We also update the virtual bottom
+    // if it's less than the new viewport height minus 1, because that would otherwise
+    // leave the virtual viewport extended past the top of the buffer.
+    const auto newViewport = Viewport::FromInclusive(srNewViewport);
+    if ((_virtualBottom >= _viewport.BottomInclusive() && _virtualBottom < newViewport.BottomInclusive()) ||
+        (_virtualBottom <= _viewport.BottomInclusive() && _virtualBottom > newViewport.BottomInclusive()) ||
+        _virtualBottom < newViewport.Height() - 1)
+    {
+        _virtualBottom = srNewViewport.bottom;
     }
 
     _viewport = newViewport;
-    UpdateBottom();
     Tracing::s_TraceWindowViewport(_viewport);
+
+    // In Conpty mode, call TriggerScroll here without params. By not providing
+    // params, the renderer will make sure to update the VtEngine with the
+    // updated viewport size. If we don't do this, the engine can get into a
+    // torn state on this frame.
+    //
+    // Without this statement, the engine won't be told about the new view size
+    // till the start of the next frame. If any other text gets output before
+    // that frame starts, there's a very real chance that it'll cause errors as
+    // the engine tries to invalidate those regions.
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    if (gci.IsInVtIoMode() && ServiceLocator::LocateGlobals().pRender)
+    {
+        ServiceLocator::LocateGlobals().pRender->TriggerScroll();
+    }
 }
 
 // Routine Description:
@@ -1263,9 +1279,9 @@ void SCREEN_INFORMATION::_InternalSetViewportSize(const COORD* const pcoordSize,
 // - pcoordSize - Requested viewport width/heights in characters
 // Return Value:
 // - <none>
-void SCREEN_INFORMATION::_AdjustViewportSize(const RECT* const prcClientNew,
-                                             const RECT* const prcClientOld,
-                                             const COORD* const pcoordSize)
+void SCREEN_INFORMATION::_AdjustViewportSize(const til::rect* const prcClientNew,
+                                             const til::rect* const prcClientOld,
+                                             const til::size* const pcoordSize)
 {
     // If the left is the only one that changed (and not the right
     // also), then adjust from the left. Otherwise if the right
@@ -1278,12 +1294,12 @@ void SCREEN_INFORMATION::_AdjustViewportSize(const RECT* const prcClientNew,
     // being dragged and forced to resize at a monitor boundary, all 4
     // will change. In this case especially, users expect the top left
     // to stay in place and the bottom right to adapt.
-    bool const fResizeFromLeft = prcClientNew->left != prcClientOld->left &&
+    const auto fResizeFromLeft = prcClientNew->left != prcClientOld->left &&
                                  prcClientNew->right == prcClientOld->right;
-    bool const fResizeFromTop = prcClientNew->top != prcClientOld->top &&
+    const auto fResizeFromTop = prcClientNew->top != prcClientOld->top &&
                                 prcClientNew->bottom == prcClientOld->bottom;
 
-    const Viewport oldViewport = Viewport(_viewport);
+    const auto oldViewport = Viewport(_viewport);
 
     _InternalSetViewportSize(pcoordSize, fResizeFromTop, fResizeFromLeft);
 
@@ -1320,9 +1336,9 @@ void SCREEN_INFORMATION::_AdjustViewportSize(const RECT* const prcClientNew,
 //   (consuming horizontal space) will need to be visible
 // Return Value:
 // - <none>
-void SCREEN_INFORMATION::s_CalculateScrollbarVisibility(const RECT* const prcClientArea,
-                                                        const COORD* const pcoordBufferSize,
-                                                        const COORD* const pcoordFontSize,
+void SCREEN_INFORMATION::s_CalculateScrollbarVisibility(const til::rect* const prcClientArea,
+                                                        const til::size* const pcoordBufferSize,
+                                                        const til::size* const pcoordFontSize,
                                                         _Out_ bool* const pfIsHorizontalVisible,
                                                         _Out_ bool* const pfIsVerticalVisible)
 {
@@ -1331,44 +1347,44 @@ void SCREEN_INFORMATION::s_CalculateScrollbarVisibility(const RECT* const prcCli
     *pfIsVerticalVisible = false;
 
     // Set up the client area in pixels
-    SIZE sizeClientPixels = { 0 };
-    sizeClientPixels.cx = RECT_WIDTH(prcClientArea);
-    sizeClientPixels.cy = RECT_HEIGHT(prcClientArea);
+    til::size sizeClientPixels;
+    sizeClientPixels.width = prcClientArea->width();
+    sizeClientPixels.height = prcClientArea->height();
 
     // Set up the buffer area in pixels by multiplying the size by the font size scale factor
-    SIZE sizeBufferPixels = { 0 };
-    sizeBufferPixels.cx = pcoordBufferSize->X * pcoordFontSize->X;
-    sizeBufferPixels.cy = pcoordBufferSize->Y * pcoordFontSize->Y;
+    til::size sizeBufferPixels;
+    sizeBufferPixels.width = pcoordBufferSize->width * pcoordFontSize->width;
+    sizeBufferPixels.height = pcoordBufferSize->height * pcoordFontSize->height;
 
     // Now figure out whether we need one or both scroll bars.
     // Showing a scroll bar in one direction may necessitate showing
     // the scroll bar in the other (as it will consume client area
     // space).
 
-    if (sizeBufferPixels.cx > sizeClientPixels.cx)
+    if (sizeBufferPixels.width > sizeClientPixels.width)
     {
         *pfIsHorizontalVisible = true;
 
         // If we have a horizontal bar, remove it from available
         // vertical space and check that remaining client area is
         // enough.
-        sizeClientPixels.cy -= ServiceLocator::LocateGlobals().sHorizontalScrollSize;
+        sizeClientPixels.height -= ServiceLocator::LocateGlobals().sHorizontalScrollSize;
 
-        if (sizeBufferPixels.cy > sizeClientPixels.cy)
+        if (sizeBufferPixels.height > sizeClientPixels.height)
         {
             *pfIsVerticalVisible = true;
         }
     }
-    else if (sizeBufferPixels.cy > sizeClientPixels.cy)
+    else if (sizeBufferPixels.height > sizeClientPixels.height)
     {
         *pfIsVerticalVisible = true;
 
         // If we have a vertical bar, remove it from available
         // horizontal space and check that remaining client area is
         // enough.
-        sizeClientPixels.cx -= ServiceLocator::LocateGlobals().sVerticalScrollSize;
+        sizeClientPixels.width -= ServiceLocator::LocateGlobals().sVerticalScrollSize;
 
-        if (sizeBufferPixels.cx > sizeClientPixels.cx)
+        if (sizeBufferPixels.width > sizeClientPixels.width)
         {
             *pfIsHorizontalVisible = true;
         }
@@ -1401,22 +1417,29 @@ bool SCREEN_INFORMATION::IsMaximizedY() const
 // - <in> Coordinates of the new screen size
 // Return Value:
 // - Success if successful. Invalid parameter if screen buffer size is unexpected. No memory if allocation failed.
-[[nodiscard]] NTSTATUS SCREEN_INFORMATION::ResizeWithReflow(const COORD coordNewScreenSize)
+[[nodiscard]] NTSTATUS SCREEN_INFORMATION::ResizeWithReflow(const til::size coordNewScreenSize)
 {
-    if ((USHORT)coordNewScreenSize.X >= SHORT_MAX || (USHORT)coordNewScreenSize.Y >= SHORT_MAX)
+    if ((USHORT)coordNewScreenSize.width >= SHORT_MAX || (USHORT)coordNewScreenSize.height >= SHORT_MAX)
     {
-        RIPMSG2(RIP_WARNING, "Invalid screen buffer size (0x%x, 0x%x)", coordNewScreenSize.X, coordNewScreenSize.Y);
+        RIPMSG2(RIP_WARNING, "Invalid screen buffer size (0x%x, 0x%x)", coordNewScreenSize.width, coordNewScreenSize.height);
         return STATUS_INVALID_PARAMETER;
     }
 
     // First allocate a new text buffer to take the place of the current one.
     std::unique_ptr<TextBuffer> newTextBuffer;
+
+    // GH#3848 - Stash away the current attributes the old text buffer is using.
+    // We'll initialize the new buffer with the default attributes, but after
+    // the resize, we'll want to make sure that the new buffer's current
+    // attributes (the ones used for printing new text) match the old buffer's.
+    const auto oldPrimaryAttributes = _textBuffer->GetCurrentAttributes();
     try
     {
         newTextBuffer = std::make_unique<TextBuffer>(coordNewScreenSize,
-                                                     GetAttributes(),
-                                                     0,
-                                                     _renderTarget); // temporarily set size to 0 so it won't render.
+                                                     TextAttribute{},
+                                                     0, // temporarily set size to 0 so it won't render.
+                                                     _textBuffer->IsActiveBuffer(),
+                                                     _textBuffer->GetRenderer());
     }
     catch (...)
     {
@@ -1424,226 +1447,47 @@ bool SCREEN_INFORMATION::IsMaximizedY() const
     }
 
     // Save cursor's relative height versus the viewport
-    SHORT const sCursorHeightInViewportBefore = _textBuffer->GetCursor().GetPosition().Y - _viewport.Top();
+    const auto sCursorHeightInViewportBefore = _textBuffer->GetCursor().GetPosition().y - _viewport.Top();
+    // Also save the distance to the virtual bottom so it can be restored after the resize
+    const auto cursorDistanceFromBottom = _virtualBottom - _textBuffer->GetCursor().GetPosition().y;
 
-    Cursor& oldCursor = _textBuffer->GetCursor();
-    Cursor& newCursor = newTextBuffer->GetCursor();
-    // skip any drawing updates that might occur as we manipulate the new buffer
-    oldCursor.StartDeferDrawing();
-    newCursor.StartDeferDrawing();
+    // skip any drawing updates that might occur until we swap _textBuffer with the new buffer or we exit early.
+    newTextBuffer->GetCursor().StartDeferDrawing();
+    _textBuffer->GetCursor().StartDeferDrawing();
+    // we're capturing _textBuffer by reference here because when we exit, we want to EndDefer on the current active buffer.
+    auto endDefer = wil::scope_exit([&]() noexcept { _textBuffer->GetCursor().EndDeferDrawing(); });
 
-    // We need to save the old cursor position so that we can
-    // place the new cursor back on the equivalent character in
-    // the new buffer.
-    COORD cOldCursorPos = oldCursor.GetPosition();
-    COORD cOldLastChar = _textBuffer->GetLastNonSpaceCharacter();
+    auto hr = TextBuffer::Reflow(*_textBuffer.get(), *newTextBuffer.get(), std::nullopt, std::nullopt);
 
-    short const cOldRowsTotal = cOldLastChar.Y + 1;
-    short const cOldColsTotal = GetBufferSize().Width();
-
-    COORD cNewCursorPos = { 0 };
-    bool fFoundCursorPos = false;
-
-    NTSTATUS status = STATUS_SUCCESS;
-    // Loop through all the rows of the old buffer and reprint them into the new buffer
-    for (short iOldRow = 0; iOldRow < cOldRowsTotal; iOldRow++)
+    if (SUCCEEDED(hr))
     {
-        // Fetch the row and its "right" which is the last printable character.
-        const ROW& Row = _textBuffer->GetRowByOffset(iOldRow);
-        const CharRow& charRow = Row.GetCharRow();
-        short iRight = static_cast<short>(charRow.MeasureRight());
+        // Since the reflow doesn't preserve the virtual bottom, we try and
+        // estimate where it ought to be by making it the same distance from
+        // the cursor row as it was before the resize. However, we also need
+        // to make sure it is far enough down to include the last non-space
+        // row, and it shouldn't be less than the height of the viewport,
+        // otherwise the top of the virtual viewport would end up negative.
+        const auto cursorRow = newTextBuffer->GetCursor().GetPosition().y;
+        const auto lastNonSpaceRow = newTextBuffer->GetLastNonSpaceCharacter().y;
+        const auto estimatedBottom = cursorRow + cursorDistanceFromBottom;
+        const auto viewportBottom = _viewport.Height() - 1;
+        _virtualBottom = std::max({ lastNonSpaceRow, estimatedBottom, viewportBottom });
 
-        // There is a special case here. If the row has a "wrap"
-        // flag on it, but the right isn't equal to the width (one
-        // index past the final valid index in the row) then there
-        // were a bunch trailing of spaces in the row.
-        // (But the measuring functions for each row Left/Right do
-        // not count spaces as "displayable" so they're not
-        // included.)
-        // As such, adjust the "right" to be the width of the row
-        // to capture all these spaces
-        if (charRow.WasWrapForced())
-        {
-            iRight = cOldColsTotal;
+        // We can't let it extend past the bottom of the buffer either.
+        _virtualBottom = std::min(_virtualBottom, newTextBuffer->GetSize().BottomInclusive());
 
-            // And a combined special case.
-            // If we wrapped off the end of the row by adding a
-            // piece of padding because of a double byte LEADING
-            // character, then remove one from the "right" to
-            // leave this padding out of the copy process.
-            if (charRow.WasDoubleBytePadded())
-            {
-                iRight--;
-            }
-        }
-
-        // Loop through every character in the current row (up to
-        // the "right" boundary, which is one past the final valid
-        // character)
-        for (short iOldCol = 0; iOldCol < iRight; iOldCol++)
-        {
-            if (iOldCol == cOldCursorPos.X && iOldRow == cOldCursorPos.Y)
-            {
-                cNewCursorPos = newCursor.GetPosition();
-                fFoundCursorPos = true;
-            }
-
-            try
-            {
-                // TODO: MSFT: 19446208 - this should just use an iterator and the inserter...
-                const auto glyph = Row.GetCharRow().GlyphAt(iOldCol);
-                const auto dbcsAttr = Row.GetCharRow().DbcsAttrAt(iOldCol);
-                const auto textAttr = Row.GetAttrRow().GetAttrByColumn(iOldCol);
-
-                if (!newTextBuffer->InsertCharacter(glyph, dbcsAttr, textAttr))
-                {
-                    status = STATUS_NO_MEMORY;
-                    break;
-                }
-            }
-            catch (...)
-            {
-                return NTSTATUS_FROM_HRESULT(wil::ResultFromCaughtException());
-            }
-        }
-        if (NT_SUCCESS(status))
-        {
-            // If we didn't have a full row to copy, insert a new
-            // line into the new buffer.
-            // Only do so if we were not forced to wrap. If we did
-            // force a word wrap, then the existing line break was
-            // only because we ran out of space.
-            if (iRight < cOldColsTotal && !charRow.WasWrapForced())
-            {
-                if (iRight == cOldCursorPos.X && iOldRow == cOldCursorPos.Y)
-                {
-                    cNewCursorPos = newCursor.GetPosition();
-                    fFoundCursorPos = true;
-                }
-                // Only do this if it's not the final line in the buffer.
-                // On the final line, we want the cursor to sit
-                // where it is done printing for the cursor
-                // adjustment to follow.
-                if (iOldRow < cOldRowsTotal - 1)
-                {
-                    status = newTextBuffer->NewlineCursor() ? status : STATUS_NO_MEMORY;
-                }
-                else
-                {
-                    // If we are on the final line of the buffer, we have one more check.
-                    // We got into this code path because we are at the right most column of a row in the old buffer
-                    // that had a hard return (no wrap was forced).
-                    // However, as we're inserting, the old row might have just barely fit into the new buffer and
-                    // caused a new soft return (wrap was forced) putting the cursor at x=0 on the line just below.
-                    // We need to preserve the memory of the hard return at this point by inserting one additional
-                    // hard newline, otherwise we've lost that information.
-                    // We only do this when the cursor has just barely poured over onto the next line so the hard return
-                    // isn't covered by the soft one.
-                    // e.g.
-                    // The old line was:
-                    // |aaaaaaaaaaaaaaaaaaa | with no wrap which means there was a newline after that final a.
-                    // The cursor was here ^
-                    // And the new line will be:
-                    // |aaaaaaaaaaaaaaaaaaa| and show a wrap at the end
-                    // |                   |
-                    //  ^ and the cursor is now there.
-                    // If we leave it like this, we've lost the newline information.
-                    // So we insert one more newline so a continued reflow of this buffer by resizing larger will
-                    // continue to look as the original output intended with the newline data.
-                    // After this fix, it looks like this:
-                    // |aaaaaaaaaaaaaaaaaaa| no wrap at the end (preserved hard newline)
-                    // |                   |
-                    //  ^ and the cursor is now here.
-                    const COORD coordNewCursor = newCursor.GetPosition();
-                    if (coordNewCursor.X == 0 && coordNewCursor.Y > 0)
-                    {
-                        if (newTextBuffer->GetRowByOffset(coordNewCursor.Y - 1).GetCharRow().WasWrapForced())
-                        {
-                            status = newTextBuffer->NewlineCursor() ? status : STATUS_NO_MEMORY;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    if (NT_SUCCESS(status))
-    {
-        // Finish copying remaining parameters from the old text buffer to the new one
-        newTextBuffer->CopyProperties(*_textBuffer);
-
-        // If we found where to put the cursor while placing characters into the buffer,
-        //   just put the cursor there. Otherwise we have to advance manually.
-        if (fFoundCursorPos)
-        {
-            newCursor.SetPosition(cNewCursorPos);
-        }
-        else
-        {
-            // Advance the cursor to the same offset as before
-            // get the number of newlines and spaces between the old end of text and the old cursor,
-            //   then advance that many newlines and chars
-            int iNewlines = cOldCursorPos.Y - cOldLastChar.Y;
-            int iIncrements = cOldCursorPos.X - cOldLastChar.X;
-            const COORD cNewLastChar = newTextBuffer->GetLastNonSpaceCharacter();
-
-            // If the last row of the new buffer wrapped, there's going to be one less newline needed,
-            //   because the cursor is already on the next line
-            if (newTextBuffer->GetRowByOffset(cNewLastChar.Y).GetCharRow().WasWrapForced())
-            {
-                iNewlines = std::max(iNewlines - 1, 0);
-            }
-            else
-            {
-                // if this buffer didn't wrap, but the old one DID, then the d(columns) of the
-                //   old buffer will be one more than in this buffer, so new need one LESS.
-                if (_textBuffer->GetRowByOffset(cOldLastChar.Y).GetCharRow().WasWrapForced())
-                {
-                    iNewlines = std::max(iNewlines - 1, 0);
-                }
-            }
-
-            for (int r = 0; r < iNewlines; r++)
-            {
-                if (!newTextBuffer->NewlineCursor())
-                {
-                    status = STATUS_NO_MEMORY;
-                    break;
-                }
-            }
-            if (NT_SUCCESS(status))
-            {
-                for (int c = 0; c < iIncrements - 1; c++)
-                {
-                    if (!newTextBuffer->IncrementCursor())
-                    {
-                        status = STATUS_NO_MEMORY;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    if (NT_SUCCESS(status))
-    {
         // Adjust the viewport so the cursor doesn't wildly fly off up or down.
-        SHORT const sCursorHeightInViewportAfter = newCursor.GetPosition().Y - _viewport.Top();
-        COORD coordCursorHeightDiff = { 0 };
-        coordCursorHeightDiff.Y = sCursorHeightInViewportAfter - sCursorHeightInViewportBefore;
-        LOG_IF_FAILED(SetViewportOrigin(false, coordCursorHeightDiff, true));
+        const auto sCursorHeightInViewportAfter = cursorRow - _viewport.Top();
+        til::point coordCursorHeightDiff;
+        coordCursorHeightDiff.y = sCursorHeightInViewportAfter - sCursorHeightInViewportBefore;
+        LOG_IF_FAILED(SetViewportOrigin(false, coordCursorHeightDiff, false));
 
-        // Save old cursor size before we delete it
-        ULONG const ulSize = oldCursor.GetSize();
+        newTextBuffer->SetCurrentAttributes(oldPrimaryAttributes);
 
         _textBuffer.swap(newTextBuffer);
-
-        // Set size back to real size as it will be taking over the rendering duties.
-        newCursor.SetSize(ulSize);
-        newCursor.EndDeferDrawing();
     }
-    oldCursor.EndDeferDrawing();
 
-    return status;
+    return NTSTATUS_FROM_HRESULT(hr);
 }
 
 //
@@ -1653,8 +1497,10 @@ bool SCREEN_INFORMATION::IsMaximizedY() const
 // - coordNewScreenSize - new size of screen.
 // Return Value:
 // - Success if successful. Invalid parameter if screen buffer size is unexpected. No memory if allocation failed.
-[[nodiscard]] NTSTATUS SCREEN_INFORMATION::ResizeTraditional(const COORD coordNewScreenSize)
+[[nodiscard]] NTSTATUS SCREEN_INFORMATION::ResizeTraditional(const til::size coordNewScreenSize)
 {
+    _textBuffer->GetCursor().StartDeferDrawing();
+    auto endDefer = wil::scope_exit([&]() noexcept { _textBuffer->GetCursor().EndDeferDrawing(); });
     return NTSTATUS_FROM_HRESULT(_textBuffer->ResizeTraditional(coordNewScreenSize));
 }
 
@@ -1666,7 +1512,7 @@ bool SCREEN_INFORMATION::IsMaximizedY() const
 // - DoScrollBarUpdate - indicates whether to update scroll bars at the end
 // Return Value:
 // - Success if successful. Invalid parameter if screen buffer size is unexpected. No memory if allocation failed.
-[[nodiscard]] NTSTATUS SCREEN_INFORMATION::ResizeScreenBuffer(const COORD coordNewScreenSize,
+[[nodiscard]] NTSTATUS SCREEN_INFORMATION::ResizeScreenBuffer(const til::size coordNewScreenSize,
                                                               const bool fDoScrollBarUpdate)
 {
     // If the size hasn't actually changed, do nothing.
@@ -1675,8 +1521,8 @@ bool SCREEN_INFORMATION::IsMaximizedY() const
         return STATUS_SUCCESS;
     }
 
-    CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-    NTSTATUS status = STATUS_SUCCESS;
+    auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    auto status = STATUS_SUCCESS;
 
     // If we're in conpty mode, suppress any immediate painting we might do
     // during the resize.
@@ -1697,8 +1543,16 @@ bool SCREEN_INFORMATION::IsMaximizedY() const
     // cancel any popups before resizing or they will not necessarily line up with new buffer positions
     CommandLine::Instance().EndAllPopups();
 
-    const bool fWrapText = gci.GetWrapText();
-    if (fWrapText)
+    const auto fWrapText = gci.GetWrapText();
+    // GH#3493: Don't reflow the alt buffer.
+    //
+    // VTE only rewraps the contents of the (normal screen + its scrollback
+    // buffer) on a resize event. It doesn't rewrap the contents of the
+    // alternate screen. The alternate screen is used by applications which
+    // repaint it after a resize event. So it doesn't really matter. However, in
+    // that short time window, after resizing the terminal but before the
+    // application catches up, this prevents vertical lines
+    if (fWrapText && !_IsAltBuffer())
     {
         status = ResizeWithReflow(coordNewScreenSize);
     }
@@ -1709,7 +1563,10 @@ bool SCREEN_INFORMATION::IsMaximizedY() const
 
     if (NT_SUCCESS(status))
     {
-        NotifyAccessibilityEventing(0, 0, (SHORT)(coordNewScreenSize.X - 1), (SHORT)(coordNewScreenSize.Y - 1));
+        if (HasAccessibilityEventing())
+        {
+            NotifyAccessibilityEventing(0, 0, coordNewScreenSize.width - 1, coordNewScreenSize.height - 1);
+        }
 
         if ((!ConvScreenInfo))
         {
@@ -1721,7 +1578,7 @@ bool SCREEN_INFORMATION::IsMaximizedY() const
         }
 
         // Fire off an event to let accessibility apps know the layout has changed.
-        if (IsActiveScreenBuffer())
+        if (_pAccessibilityNotifier && IsActiveScreenBuffer())
         {
             _pAccessibilityNotifier->NotifyConsoleLayoutEvent();
         }
@@ -1745,14 +1602,14 @@ bool SCREEN_INFORMATION::IsMaximizedY() const
 // - psrRect - Pointer to rectangle holding data to be trimmed
 // Return Value:
 // - <none>
-void SCREEN_INFORMATION::ClipToScreenBuffer(_Inout_ SMALL_RECT* const psrClip) const
+void SCREEN_INFORMATION::ClipToScreenBuffer(_Inout_ til::inclusive_rect* const psrClip) const
 {
     const auto bufferSize = GetBufferSize();
 
-    psrClip->Left = std::max(psrClip->Left, bufferSize.Left());
-    psrClip->Top = std::max(psrClip->Top, bufferSize.Top());
-    psrClip->Right = std::min(psrClip->Right, bufferSize.RightInclusive());
-    psrClip->Bottom = std::min(psrClip->Bottom, bufferSize.BottomInclusive());
+    psrClip->left = std::max(psrClip->left, bufferSize.Left());
+    psrClip->top = std::max(psrClip->top, bufferSize.Top());
+    psrClip->right = std::min(psrClip->right, bufferSize.RightInclusive());
+    psrClip->bottom = std::min(psrClip->bottom, bufferSize.BottomInclusive());
 }
 
 void SCREEN_INFORMATION::MakeCurrentCursorVisible()
@@ -1772,40 +1629,25 @@ void SCREEN_INFORMATION::MakeCurrentCursorVisible()
 void SCREEN_INFORMATION::SetCursorInformation(const ULONG Size,
                                               const bool Visible) noexcept
 {
-    Cursor& cursor = _textBuffer->GetCursor();
+    auto& cursor = _textBuffer->GetCursor();
+    const auto originalSize = cursor.GetSize();
 
     cursor.SetSize(Size);
     cursor.SetIsVisible(Visible);
-    cursor.SetType(CursorType::Legacy);
+
+    // If we are just trying to change the visibility, we don't want to reset
+    // the cursor type. We only need to force it to the Legacy style if the
+    // size is actually being changed.
+    if (Size != originalSize)
+    {
+        cursor.SetType(CursorType::Legacy);
+    }
 
     // If we're an alt buffer, also update our main buffer.
     // Users of the API expect both to be set - this can't be set by VT
     if (_psiMainBuffer)
     {
         _psiMainBuffer->SetCursorInformation(Size, Visible);
-    }
-}
-
-// Routine Description:
-// - This routine sets the cursor color. Also updates the cursor information of
-//      this buffer's main buffer, if this buffer is an alt buffer.
-// Arguments:
-// - Color - The new color to set the cursor to
-// - setMain - If true, propagate change to main buffer as well.
-// Return Value:
-// - None
-void SCREEN_INFORMATION::SetCursorColor(const unsigned int Color, const bool setMain) noexcept
-{
-    Cursor& cursor = _textBuffer->GetCursor();
-
-    cursor.SetColor(Color);
-
-    // If we're an alt buffer, DON'T propagate this setting up to the main buffer.
-    // We don't want to pollute that buffer with this state,
-    // UNLESS we're getting called from the propsheet, then we DO want to update this.
-    if (_psiMainBuffer && setMain)
-    {
-        _psiMainBuffer->SetCursorColor(Color);
     }
 }
 
@@ -1820,7 +1662,7 @@ void SCREEN_INFORMATION::SetCursorColor(const unsigned int Color, const bool set
 // - None
 void SCREEN_INFORMATION::SetCursorType(const CursorType Type, const bool setMain) noexcept
 {
-    Cursor& cursor = _textBuffer->GetCursor();
+    auto& cursor = _textBuffer->GetCursor();
 
     cursor.SetType(Type);
 
@@ -1844,7 +1686,7 @@ void SCREEN_INFORMATION::SetCursorType(const CursorType Type, const bool setMain
 // - None
 void SCREEN_INFORMATION::SetCursorDBMode(const bool DoubleCursor)
 {
-    Cursor& cursor = _textBuffer->GetCursor();
+    auto& cursor = _textBuffer->GetCursor();
 
     if ((cursor.IsDouble() != DoubleCursor))
     {
@@ -1866,22 +1708,41 @@ void SCREEN_INFORMATION::SetCursorDBMode(const bool DoubleCursor)
 // - TurnOn - true if cursor should be left on, false if should be left off
 // Return Value:
 // - Status
-[[nodiscard]] NTSTATUS SCREEN_INFORMATION::SetCursorPosition(const COORD Position, const bool TurnOn)
+[[nodiscard]] NTSTATUS SCREEN_INFORMATION::SetCursorPosition(const til::point Position, const bool TurnOn)
 {
-    const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-    Cursor& cursor = _textBuffer->GetCursor();
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    auto& cursor = _textBuffer->GetCursor();
 
     //
     // Ensure that the cursor position is within the constraints of the screen
     // buffer.
     //
-    const COORD coordScreenBufferSize = GetBufferSize().Dimensions();
-    if (Position.X >= coordScreenBufferSize.X || Position.Y >= coordScreenBufferSize.Y || Position.X < 0 || Position.Y < 0)
+    const auto coordScreenBufferSize = GetBufferSize().Dimensions();
+    if (Position.x >= coordScreenBufferSize.width || Position.y >= coordScreenBufferSize.height || Position.x < 0 || Position.y < 0)
     {
         return STATUS_INVALID_PARAMETER;
     }
 
+    // In GH#5291, we experimented with manually breaking the line on all cursor
+    // movements here. As we print lines into the buffer, we mark lines as
+    // wrapped when we print the last cell of the row, not the first cell of the
+    // subsequent row (the row the first line wrapped onto).
+    //
+    // Logically, we thought that manually breaking lines when we move the
+    // cursor was a good idea. We however, did not have the time to fully
+    // validate that this was the correct answer, and a simpler solution for the
+    // bug on hand was found. Furthermore, we thought it would be a more
+    // comprehensive solution to only mark lines as wrapped when we print the
+    // first cell of the second row, which would require some WriteCharsLegacy
+    // work.
+
     cursor.SetPosition(Position);
+
+    // If the cursor has moved below the virtual bottom, the bottom should be updated.
+    if (Position.y > _virtualBottom)
+    {
+        _virtualBottom = Position.y;
+    }
 
     // if we have the focus, adjust the cursor state
     if (gci.Flags & CONSOLE_HAS_FOCUS)
@@ -1901,39 +1762,39 @@ void SCREEN_INFORMATION::SetCursorDBMode(const bool DoubleCursor)
     return STATUS_SUCCESS;
 }
 
-void SCREEN_INFORMATION::MakeCursorVisible(const COORD CursorPosition, const bool updateBottom)
+void SCREEN_INFORMATION::MakeCursorVisible(const til::point CursorPosition)
 {
-    COORD WindowOrigin;
+    til::point WindowOrigin;
 
-    if (CursorPosition.X > _viewport.RightInclusive())
+    if (CursorPosition.x > _viewport.RightInclusive())
     {
-        WindowOrigin.X = CursorPosition.X - _viewport.RightInclusive();
+        WindowOrigin.x = CursorPosition.x - _viewport.RightInclusive();
     }
-    else if (CursorPosition.X < _viewport.Left())
+    else if (CursorPosition.x < _viewport.Left())
     {
-        WindowOrigin.X = CursorPosition.X - _viewport.Left();
+        WindowOrigin.x = CursorPosition.x - _viewport.Left();
     }
     else
     {
-        WindowOrigin.X = 0;
+        WindowOrigin.x = 0;
     }
 
-    if (CursorPosition.Y > _viewport.BottomInclusive())
+    if (CursorPosition.y > _viewport.BottomInclusive())
     {
-        WindowOrigin.Y = CursorPosition.Y - _viewport.BottomInclusive();
+        WindowOrigin.y = CursorPosition.y - _viewport.BottomInclusive();
     }
-    else if (CursorPosition.Y < _viewport.Top())
+    else if (CursorPosition.y < _viewport.Top())
     {
-        WindowOrigin.Y = CursorPosition.Y - _viewport.Top();
+        WindowOrigin.y = CursorPosition.y - _viewport.Top();
     }
     else
     {
-        WindowOrigin.Y = 0;
+        WindowOrigin.y = 0;
     }
 
-    if (WindowOrigin.X != 0 || WindowOrigin.Y != 0)
+    if (WindowOrigin.x != 0 || WindowOrigin.y != 0)
     {
-        LOG_IF_FAILED(SetViewportOrigin(false, WindowOrigin, updateBottom));
+        LOG_IF_FAILED(SetViewportOrigin(false, WindowOrigin, false));
     }
 }
 
@@ -2017,34 +1878,41 @@ const SCREEN_INFORMATION& SCREEN_INFORMATION::GetMainBuffer() const
 //     machine with the main buffer it belongs to.
 // TODO: MSFT:19817348 Don't create alt screenbuffer's via an out SCREEN_INFORMATION**
 // Parameters:
-// - ppsiNewScreenBuffer - a pointer to recieve the newly created buffer.
+// - ppsiNewScreenBuffer - a pointer to receive the newly created buffer.
 // Return value:
-// - STATUS_SUCCESS if handled successfully. Otherwise, an approriate status code indicating the error.
+// - STATUS_SUCCESS if handled successfully. Otherwise, an appropriate status code indicating the error.
 [[nodiscard]] NTSTATUS SCREEN_INFORMATION::_CreateAltBuffer(_Out_ SCREEN_INFORMATION** const ppsiNewScreenBuffer)
 {
     // Create new screen buffer.
-    COORD WindowSize = _viewport.Dimensions();
+    auto WindowSize = _viewport.Dimensions();
 
-    const FontInfo& existingFont = GetCurrentFont();
+    const auto& existingFont = GetCurrentFont();
 
     // The buffer needs to be initialized with the standard erase attributes,
     // i.e. the current background color, but with no meta attributes set.
     auto initAttributes = GetAttributes();
     initAttributes.SetStandardErase();
 
-    NTSTATUS Status = SCREEN_INFORMATION::CreateInstance(WindowSize,
-                                                         existingFont,
-                                                         WindowSize,
-                                                         initAttributes,
-                                                         *GetPopupAttributes(),
-                                                         Cursor::CURSOR_SMALL_SIZE,
-                                                         ppsiNewScreenBuffer);
+    auto Status = SCREEN_INFORMATION::CreateInstance(WindowSize,
+                                                     existingFont,
+                                                     WindowSize,
+                                                     initAttributes,
+                                                     GetPopupAttributes(),
+                                                     Cursor::CURSOR_SMALL_SIZE,
+                                                     ppsiNewScreenBuffer);
     if (NT_SUCCESS(Status))
     {
-        // Update the alt buffer's cursor style to match our own.
+        // Update the alt buffer's cursor style, visibility, and position to match our own.
         auto& myCursor = GetTextBuffer().GetCursor();
         auto* const createdBuffer = *ppsiNewScreenBuffer;
-        createdBuffer->GetTextBuffer().GetCursor().SetStyle(myCursor.GetSize(), myCursor.GetColor(), myCursor.GetType());
+        auto& altCursor = createdBuffer->GetTextBuffer().GetCursor();
+        altCursor.SetStyle(myCursor.GetSize(), myCursor.GetType());
+        altCursor.SetIsVisible(myCursor.IsVisible());
+        altCursor.SetBlinkingAllowed(myCursor.IsBlinkingAllowed());
+        // The new position should match the viewport-relative position of the main buffer.
+        auto altCursorPos = myCursor.GetPosition();
+        altCursorPos.y -= GetVirtualViewport().Top();
+        altCursor.SetPosition(altCursorPos);
 
         s_InsertScreenBuffer(createdBuffer);
 
@@ -2054,11 +1922,67 @@ const SCREEN_INFORMATION& SCREEN_INFORMATION::GetMainBuffer() const
 
         // Set up the new buffers references to our current state machine, dispatcher, getset, etc.
         createdBuffer->_stateMachine = _stateMachine;
-
-        // Setup the alt buffer's tabs stops with the default tab stop settings
-        createdBuffer->SetDefaultVtTabStops();
     }
     return Status;
+}
+
+// Function Description:
+// - Handle deferred resizes that may have happened while the alt buffer was
+//   active. Both resizes on the HWND itself (_fAltWindowChanged), and resizes
+//   to the viewport of the alt buffer (which in turn should resize the buffer),
+//   are handled here.
+// Arguments:
+// - siMain: the main buffer whose resize was deferred.
+// Return Value:
+// - <none>
+void SCREEN_INFORMATION::_handleDeferredResize(SCREEN_INFORMATION& siMain)
+{
+    if (siMain._fAltWindowChanged)
+    {
+        siMain.ProcessResizeWindow(&(siMain._rcAltSavedClientNew), &(siMain._rcAltSavedClientOld));
+        siMain._fAltWindowChanged = false;
+    }
+    else if (siMain._deferredPtyResize.has_value())
+    {
+        const auto newViewSize = siMain._deferredPtyResize.value();
+        // Tricky! We want to make sure to resize the actual main buffer
+        // here, not just change the size of the viewport. When they resized
+        // the alt buffer, the dimensions of the alt buffer changed. We
+        // should make sure the main buffer reflects similar changes.
+        //
+        // To do this, we have to emulate bits of
+        // ConhostInternalGetSet::ResizeWindow. We can't call that
+        // straight-up, because the main buffer isn't active yet.
+        const auto oldScreenBufferSize = siMain.GetBufferSize().Dimensions();
+        auto newBufferSize = oldScreenBufferSize;
+
+        // Always resize the width of the console
+        newBufferSize.width = newViewSize.width;
+
+        // Only set the new buffer's height if the new size will be TALLER than the current size (e.g., resizing a 80x32 buffer to be 80x124).
+        if (newViewSize.height > oldScreenBufferSize.height)
+        {
+            newBufferSize.height = newViewSize.height;
+        }
+
+        // From ApiRoutines::SetConsoleScreenBufferInfoExImpl. We don't need
+        // the whole call to SetConsoleScreenBufferInfoEx here, that's
+        // too much work.
+        if (newBufferSize != oldScreenBufferSize)
+        {
+            auto& commandLine = CommandLine::Instance();
+            commandLine.Hide(FALSE);
+            LOG_IF_FAILED(siMain.ResizeScreenBuffer(newBufferSize, TRUE));
+            commandLine.Show();
+        }
+
+        // Not that the buffer is smaller, actually make sure to resize our
+        // viewport to match.
+        siMain.SetViewportSize(&newViewSize);
+
+        // Clear out the resize.
+        siMain._deferredPtyResize = std::nullopt;
+    }
 }
 
 // Routine Description:
@@ -2068,26 +1992,22 @@ const SCREEN_INFORMATION& SCREEN_INFORMATION::GetMainBuffer() const
 // Parameters:
 // - None
 // Return value:
-// - STATUS_SUCCESS if handled successfully. Otherwise, an approriate status code indicating the error.
+// - STATUS_SUCCESS if handled successfully. Otherwise, an appropriate status code indicating the error.
 [[nodiscard]] NTSTATUS SCREEN_INFORMATION::UseAlternateScreenBuffer()
 {
-    CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-    SCREEN_INFORMATION& siMain = GetMainBuffer();
+    auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    auto& siMain = GetMainBuffer();
     // If we're in an alt that resized, resize the main before making the new alt
-    if (siMain._fAltWindowChanged)
-    {
-        siMain.ProcessResizeWindow(&(siMain._rcAltSavedClientNew), &(siMain._rcAltSavedClientOld));
-        siMain._fAltWindowChanged = false;
-    }
+    _handleDeferredResize(siMain);
 
     SCREEN_INFORMATION* psiNewAltBuffer;
-    NTSTATUS Status = _CreateAltBuffer(&psiNewAltBuffer);
+    auto Status = _CreateAltBuffer(&psiNewAltBuffer);
     if (NT_SUCCESS(Status))
     {
         // if this is already an alternate buffer, we want to make the new
         // buffer the alt on our main buffer, not on ourself, because there
         // can only ever be one main and one alternate.
-        SCREEN_INFORMATION* const psiOldAltBuffer = siMain._psiAlternateBuffer;
+        const auto psiOldAltBuffer = siMain._psiAlternateBuffer;
 
         psiNewAltBuffer->_psiMainBuffer = &siMain;
         siMain._psiAlternateBuffer = psiNewAltBuffer;
@@ -2095,6 +2015,15 @@ const SCREEN_INFORMATION& SCREEN_INFORMATION::GetMainBuffer() const
         if (psiOldAltBuffer != nullptr)
         {
             s_RemoveScreenBuffer(psiOldAltBuffer); // this will also delete the old alt buffer
+        }
+
+        // GH#381: When we switch into the alt buffer:
+        //  * flush the current frame, to clear out anything that we prepared for this buffer.
+        //  * Emit a ?1049h/l to the remote side, to let them know that we've switched buffers.
+        if (gci.IsInVtIoMode() && ServiceLocator::LocateGlobals().pRender)
+        {
+            ServiceLocator::LocateGlobals().pRender->TriggerFlush(false);
+            LOG_IF_FAILED(gci.GetVtIo()->SwitchScreenBuffer(true));
         }
 
         ::SetActiveScreenBuffer(*psiNewAltBuffer);
@@ -2105,7 +2034,7 @@ const SCREEN_INFORMATION& SCREEN_INFORMATION::GetMainBuffer() const
         ScreenBufferSizeChange(psiNewAltBuffer->GetBufferSize().Dimensions());
 
         // Tell the VT MouseInput handler that we're in the Alt buffer now
-        gci.terminalMouseInput.UseAlternateScreenBuffer();
+        gci.GetActiveInputBuffer()->GetTerminalInput().UseAlternateScreenBuffer();
     }
     return Status;
 }
@@ -2115,31 +2044,45 @@ const SCREEN_INFORMATION& SCREEN_INFORMATION::GetMainBuffer() const
 // Parameters:
 // - None
 // Return value:
-// - STATUS_SUCCESS if handled successfully. Otherwise, an approriate status code indicating the error.
+// - STATUS_SUCCESS if handled successfully. Otherwise, an appropriate status code indicating the error.
 void SCREEN_INFORMATION::UseMainScreenBuffer()
 {
-    CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-    SCREEN_INFORMATION* psiMain = _psiMainBuffer;
+    auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    auto psiMain = _psiMainBuffer;
     if (psiMain != nullptr)
     {
-        if (psiMain->_fAltWindowChanged)
+        _handleDeferredResize(*psiMain);
+
+        // GH#381: When we switch into the main buffer:
+        //  * flush the current frame, to clear out anything that we prepared for this buffer.
+        //  * Emit a ?1049h/l to the remote side, to let them know that we've switched buffers.
+        if (gci.IsInVtIoMode() && ServiceLocator::LocateGlobals().pRender)
         {
-            psiMain->ProcessResizeWindow(&(psiMain->_rcAltSavedClientNew), &(psiMain->_rcAltSavedClientOld));
-            psiMain->_fAltWindowChanged = false;
+            ServiceLocator::LocateGlobals().pRender->TriggerFlush(false);
+            LOG_IF_FAILED(gci.GetVtIo()->SwitchScreenBuffer(false));
         }
+
         ::SetActiveScreenBuffer(*psiMain);
         psiMain->UpdateScrollBars(); // The alt had disabled scrollbars, re-enable them
 
         // send a _coordScreenBufferSizeChangeEvent for the new Sb viewport
         ScreenBufferSizeChange(psiMain->GetBufferSize().Dimensions());
 
-        SCREEN_INFORMATION* psiAlt = psiMain->_psiAlternateBuffer;
+        auto psiAlt = psiMain->_psiAlternateBuffer;
         psiMain->_psiAlternateBuffer = nullptr;
+
+        // Copy the alt buffer's cursor style and visibility back to the main buffer.
+        const auto& altCursor = psiAlt->GetTextBuffer().GetCursor();
+        auto& mainCursor = psiMain->GetTextBuffer().GetCursor();
+        mainCursor.SetStyle(altCursor.GetSize(), altCursor.GetType());
+        mainCursor.SetIsVisible(altCursor.IsVisible());
+        mainCursor.SetBlinkingAllowed(altCursor.IsBlinkingAllowed());
+
         s_RemoveScreenBuffer(psiAlt); // this will also delete the alt buffer
         // deleting the alt buffer will give the GetSet back to its main
 
         // Tell the VT MouseInput handler that we're in the main buffer now
-        gci.terminalMouseInput.UseMainScreenBuffer();
+        gci.GetActiveInputBuffer()->GetTerminalInput().UseMainScreenBuffer();
     }
 }
 
@@ -2164,132 +2107,19 @@ bool SCREEN_INFORMATION::_IsAltBuffer() const
 // - true iff this buffer has a main buffer.
 bool SCREEN_INFORMATION::_IsInPtyMode() const
 {
-    const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
     return _IsAltBuffer() || gci.IsInVtIoMode();
 }
 
 // Routine Description:
-// - Sets a VT tab stop in the column sColumn. If there is already a tab there, it does nothing.
+// - returns true if this buffer is in Virtual Terminal Output mode.
 // Parameters:
-// - sColumn: the column to add a tab stop to.
-// Return value:
-// - none
-// Note: may throw exception on allocation error
-void SCREEN_INFORMATION::AddTabStop(const SHORT sColumn)
+// - None
+// Return Value:
+// - true iff this buffer is in Virtual Terminal Output mode.
+bool SCREEN_INFORMATION::_IsInVTMode() const
 {
-    if (std::find(_tabStops.begin(), _tabStops.end(), sColumn) == _tabStops.end())
-    {
-        _tabStops.push_back(sColumn);
-        _tabStops.sort();
-    }
-}
-
-// Routine Description:
-// - Clears all of the VT tabs that have been set. This also deletes them.
-// Parameters:
-// <none>
-// Return value:
-// <none>
-void SCREEN_INFORMATION::ClearTabStops() noexcept
-{
-    _tabStops.clear();
-}
-
-// Routine Description:
-// - Clears the VT tab in the column sColumn (if one has been set). Also deletes it from the heap.
-// Parameters:
-// - sColumn - The column to clear the tab stop for.
-// Return value:
-// <none>
-void SCREEN_INFORMATION::ClearTabStop(const SHORT sColumn) noexcept
-{
-    _tabStops.remove(sColumn);
-}
-
-// Routine Description:
-// - Places the location that a forwards tab would take cCurrCursorPos to into pcNewCursorPos
-// Parameters:
-// - cCurrCursorPos - The initial cursor location
-// Return value:
-// - <none>
-COORD SCREEN_INFORMATION::GetForwardTab(const COORD cCurrCursorPos) const noexcept
-{
-    COORD cNewCursorPos = cCurrCursorPos;
-    SHORT sWidth = GetBufferSize().RightInclusive();
-    if (_tabStops.empty() || cCurrCursorPos.X >= _tabStops.back())
-    {
-        cNewCursorPos.X = sWidth;
-    }
-    else
-    {
-        // search for next tab stop
-        for (auto it = _tabStops.cbegin(); it != _tabStops.cend(); ++it)
-        {
-            if (*it > cCurrCursorPos.X)
-            {
-                // make sure we don't exceed the width of the buffer
-                cNewCursorPos.X = std::min(*it, sWidth);
-                break;
-            }
-        }
-    }
-    return cNewCursorPos;
-}
-
-// Routine Description:
-// - Places the location that a backwards tab would take cCurrCursorPos to into pcNewCursorPos
-// Parameters:
-// - cCurrCursorPos - The initial cursor location
-// Return value:
-// - <none>
-COORD SCREEN_INFORMATION::GetReverseTab(const COORD cCurrCursorPos) const noexcept
-{
-    COORD cNewCursorPos = cCurrCursorPos;
-    // if we're at 0, or there are NO tabs, or the first tab is farther right than where we are
-    if (cCurrCursorPos.X == 0 || _tabStops.empty() || _tabStops.front() >= cCurrCursorPos.X)
-    {
-        cNewCursorPos.X = 0;
-    }
-    else
-    {
-        for (auto it = _tabStops.crbegin(); it != _tabStops.crend(); ++it)
-        {
-            if (*it < cCurrCursorPos.X)
-            {
-                cNewCursorPos.X = *it;
-                break;
-            }
-        }
-    }
-    return cNewCursorPos;
-}
-
-// Routine Description:
-// - Returns true if any VT-style tab stops have been set (with AddTabStop)
-// Parameters:
-// <none>
-// Return value:
-// - true if any VT-style tab stops have been set
-bool SCREEN_INFORMATION::AreTabsSet() const noexcept
-{
-    return !_tabStops.empty();
-}
-
-// Routine Description:
-// - adds default tab stops for vt mode
-void SCREEN_INFORMATION::SetDefaultVtTabStops()
-{
-    _tabStops.clear();
-    const int width = GetBufferSize().RightInclusive();
-    FAIL_FAST_IF(width < 0);
-    for (int pos = 0; pos <= width; pos += TAB_SIZE)
-    {
-        _tabStops.push_back(gsl::narrow<short>(pos));
-    }
-    if (_tabStops.back() != width)
-    {
-        _tabStops.push_back(gsl::narrow<short>(width));
-    }
+    return WI_IsFlagSet(OutputMode, ENABLE_VIRTUAL_TERMINAL_PROCESSING);
 }
 
 // Routine Description:
@@ -2309,9 +2139,9 @@ TextAttribute SCREEN_INFORMATION::GetAttributes() const
 // <none>
 // Return value:
 // - This screen buffer's popup attributes
-const TextAttribute* const SCREEN_INFORMATION::GetPopupAttributes() const
+TextAttribute SCREEN_INFORMATION::GetPopupAttributes() const
 {
-    return &_PopupAttributes;
+    return _PopupAttributes;
 }
 
 // Routine Description:
@@ -2323,6 +2153,13 @@ const TextAttribute* const SCREEN_INFORMATION::GetPopupAttributes() const
 // <none>
 void SCREEN_INFORMATION::SetAttributes(const TextAttribute& attributes)
 {
+    if (_ignoreLegacyEquivalentVTAttributes)
+    {
+        // See the comment on StripErroneousVT16VersionsOfLegacyDefaults for more info.
+        _textBuffer->SetCurrentAttributes(TextAttribute::StripErroneousVT16VersionsOfLegacyDefaults(attributes));
+        return;
+    }
+
     _textBuffer->SetCurrentAttributes(attributes);
 
     // If we're an alt buffer, DON'T propagate this setting up to the main buffer.
@@ -2360,10 +2197,10 @@ void SCREEN_INFORMATION::SetPopupAttributes(const TextAttribute& popupAttributes
 void SCREEN_INFORMATION::SetDefaultAttributes(const TextAttribute& attributes,
                                               const TextAttribute& popupAttributes)
 {
-    CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
 
-    const TextAttribute oldPrimaryAttributes = GetAttributes();
-    const TextAttribute oldPopupAttributes = *GetPopupAttributes();
+    const auto oldPrimaryAttributes = GetAttributes();
+    const auto oldPopupAttributes = GetPopupAttributes();
 
     // Quick return if we don't need to do anything.
     if (oldPrimaryAttributes == attributes && oldPopupAttributes == popupAttributes)
@@ -2374,14 +2211,13 @@ void SCREEN_INFORMATION::SetDefaultAttributes(const TextAttribute& attributes,
     SetAttributes(attributes);
     SetPopupAttributes(popupAttributes);
 
-    auto& commandLine = CommandLine::Instance();
-    if (commandLine.HasPopup())
+    // Force repaint of entire viewport, unless we're in conpty mode. In that
+    // case, we don't really need to force a redraw of the entire screen just
+    // because the text attributes changed.
+    if (!(gci.IsInVtIoMode()))
     {
-        commandLine.UpdatePopups(attributes, popupAttributes, oldPrimaryAttributes, oldPopupAttributes);
+        _textBuffer->TriggerRedrawAll();
     }
-
-    // force repaint of entire viewport
-    GetRenderTarget().TriggerRedrawAll();
 
     gci.ConsoleIme.RefreshAreaAttributes();
 
@@ -2426,30 +2262,19 @@ void SCREEN_INFORMATION::SetViewport(const Viewport& newViewport,
     }
 
     // do adjustments on a copy that's easily manipulated.
-    SMALL_RECT srCorrected = newViewport.ToInclusive();
+    const til::rect viewportRect{ newViewport.ToInclusive() };
+    const til::size coordScreenBufferSize{ GetBufferSize().Dimensions() };
 
-    if (srCorrected.Left < 0)
-    {
-        srCorrected.Right -= srCorrected.Left;
-        srCorrected.Left = 0;
-    }
-    if (srCorrected.Top < 0)
-    {
-        srCorrected.Bottom -= srCorrected.Top;
-        srCorrected.Top = 0;
-    }
+    // MSFT-33471786, GH#13193:
+    // newViewport may reside anywhere outside of the valid coordScreenBufferSize.
+    // For instance it might be scrolled down more than our text buffer allows to be scrolled.
+    const auto cx = gsl::narrow_cast<SHORT>(std::clamp(viewportRect.width(), 1, coordScreenBufferSize.width));
+    const auto cy = gsl::narrow_cast<SHORT>(std::clamp(viewportRect.height(), 1, coordScreenBufferSize.height));
+    const auto x = gsl::narrow_cast<SHORT>(std::clamp(viewportRect.left, 0, coordScreenBufferSize.width - cx));
+    const auto y = gsl::narrow_cast<SHORT>(std::clamp(viewportRect.top, 0, coordScreenBufferSize.height - cy));
 
-    const COORD coordScreenBufferSize = GetBufferSize().Dimensions();
-    if (srCorrected.Right >= coordScreenBufferSize.X)
-    {
-        srCorrected.Right = coordScreenBufferSize.X;
-    }
-    if (srCorrected.Bottom >= coordScreenBufferSize.Y)
-    {
-        srCorrected.Bottom = coordScreenBufferSize.Y;
-    }
+    _viewport = Viewport::FromExclusive({ x, y, x + cx, y + cy });
 
-    _viewport = Viewport::FromInclusive(srCorrected);
     if (updateBottom)
     {
         UpdateBottom();
@@ -2459,64 +2284,68 @@ void SCREEN_INFORMATION::SetViewport(const Viewport& newViewport,
 }
 
 // Method Description:
-// - Performs a VT Erase All operation. In most terminals, this is done by
-//      moving the viewport into the scrollback, clearing out the current screen.
-//      For them, there can never be any characters beneath the viewport, as the
-//      viewport is always at the bottom. So, we can accomplish the same behavior
-//      by using the LastNonspaceCharacter as the "bottom", and placing the new
-//      viewport underneath that character.
-// Parameters:
-//  <none>
-// Return value:
-// - S_OK if we succeeded, or another status if there was a failure.
-[[nodiscard]] HRESULT SCREEN_INFORMATION::VtEraseAll()
+// - Clear the entire contents of the viewport, except for the cursor's row,
+//   which is moved to the top line of the viewport.
+// - This is used exclusively by ConPTY to support GH#1193, GH#1882. This allows
+//   a terminal to clear the contents of the ConPTY buffer, which is important
+//   if the user would like to be able to clear the terminal-side buffer.
+// Arguments:
+// - <none>
+// Return Value:
+// - S_OK
+[[nodiscard]] HRESULT SCREEN_INFORMATION::ClearBuffer()
 {
-    const COORD coordLastChar = _textBuffer->GetLastNonSpaceCharacter();
-    short sNewTop = coordLastChar.Y + 1;
-    const Viewport oldViewport = _viewport;
-    // Stash away the current position of the cursor within the viewport.
-    // We'll need to restore the cursor to that same relative position, after
-    //      we move the viewport.
-    const COORD oldCursorPos = _textBuffer->GetCursor().GetPosition();
-    COORD relativeCursor = oldCursorPos;
-    oldViewport.ConvertToOrigin(&relativeCursor);
+    const auto oldCursorPos = _textBuffer->GetCursor().GetPosition();
+    auto sNewTop = oldCursorPos.y;
 
-    short delta = (sNewTop + _viewport.Height()) - (GetBufferSize().Height());
+    auto delta = (sNewTop + _viewport.Height()) - (GetBufferSize().Height());
     for (auto i = 0; i < delta; i++)
     {
         _textBuffer->IncrementCircularBuffer();
         sNewTop--;
     }
 
-    const COORD coordNewOrigin = { 0, sNewTop };
+    const til::point coordNewOrigin{ 0, sNewTop };
     RETURN_IF_FAILED(SetViewportOrigin(true, coordNewOrigin, true));
-    // Restore the relative cursor position
-    _viewport.ConvertFromOrigin(&relativeCursor);
-    RETURN_IF_FAILED(SetCursorPosition(relativeCursor, false));
+
+    // SetViewportOrigin will only move the virtual bottom down, but in this
+    // case we need to reset it to the top, so we have to update it explicitly.
+    UpdateBottom();
+
+    // Place the cursor at the same x coord, on the row that's now the top
+    RETURN_IF_FAILED(SetCursorPosition({ oldCursorPos.x, sNewTop }, false));
 
     // Update all the rows in the current viewport with the standard erase attributes,
     // i.e. the current background color, but with no meta attributes set.
     auto fillAttributes = GetAttributes();
     fillAttributes.SetStandardErase();
-    auto fillPosition = COORD{ 0, _viewport.Top() };
-    auto fillLength = gsl::narrow_cast<size_t>(_viewport.Height() * GetBufferSize().Width());
+
+    // +1 on the y coord because we don't want to clear the attributes of the
+    // cursor row, the one we saved.
+    til::point fillPosition{ 0, _viewport.Top() + 1 };
+    auto fillLength = gsl::narrow<size_t>(_viewport.Height() * GetBufferSize().Width());
     auto fillData = OutputCellIterator{ fillAttributes, fillLength };
     Write(fillData, fillPosition, false);
+
+    _textBuffer->TriggerRedrawAll();
+
+    // Also reset the line rendition for the erased rows.
+    _textBuffer->ResetLineRenditionRange(_viewport.Top(), _viewport.BottomExclusive());
 
     return S_OK;
 }
 
 // Method Description:
 // - Sets up the Output state machine to be in pty mode. Sequences it doesn't
-//      understand will be written to tthe pTtyConnection passed in here.
+//      understand will be written to the pTtyConnection passed in here.
 // Arguments:
-// - pTtyConnection: This is a TerminaOutputConnection that we can write the
+// - pTtyConnection: This is a TerminalOutputConnection that we can write the
 //      sequence we didn't understand to.
 // Return Value:
 // - <none>
-void SCREEN_INFORMATION::SetTerminalConnection(_In_ ITerminalOutputConnection* const pTtyConnection)
+void SCREEN_INFORMATION::SetTerminalConnection(_In_ VtEngine* const pTtyConnection)
 {
-    OutputStateMachineEngine& engine = reinterpret_cast<OutputStateMachineEngine&>(_stateMachine->Engine());
+    auto& engine = reinterpret_cast<OutputStateMachineEngine&>(_stateMachine->Engine());
     if (pTtyConnection)
     {
         engine.SetTerminalConnection(pTtyConnection,
@@ -2544,10 +2373,10 @@ OutputCellRect SCREEN_INFORMATION::ReadRect(const Viewport viewport) const
 
     OutputCellRect result(viewport.Height(), viewport.Width());
     const OutputCell paddingCell{ std::wstring_view{ &UNICODE_SPACE, 1 }, {}, GetAttributes() };
-    for (size_t rowIndex = 0; rowIndex < gsl::narrow<size_t>(viewport.Height()); ++rowIndex)
+    for (til::CoordType rowIndex = 0, height = viewport.Height(); rowIndex < height; ++rowIndex)
     {
-        COORD location = viewport.Origin();
-        location.Y += (SHORT)rowIndex;
+        auto location = viewport.Origin();
+        location.y += rowIndex;
 
         auto data = GetCellLineDataAt(location);
         const auto span = result.GetRow(rowIndex);
@@ -2566,11 +2395,11 @@ OutputCellRect SCREEN_INFORMATION::ReadRect(const Viewport viewport) const
         }
 
         // if we're clipping a dbcs char then don't include it, add a space instead
-        if (span.begin()->DbcsAttr().IsTrailing())
+        if (span.begin()->DbcsAttr() == DbcsAttribute::Trailing)
         {
             *span.begin() = paddingCell;
         }
-        if (span.rbegin()->DbcsAttr().IsLeading())
+        if (span.rbegin()->DbcsAttr() == DbcsAttribute::Leading)
         {
             *span.rbegin() = paddingCell;
         }
@@ -2603,7 +2432,7 @@ OutputCellIterator SCREEN_INFORMATION::Write(const OutputCellIterator it)
 // Note:
 // - will throw exception on error.
 OutputCellIterator SCREEN_INFORMATION::Write(const OutputCellIterator it,
-                                             const COORD target,
+                                             const til::point target,
                                              const std::optional<bool> wrap)
 {
     // NOTE: if wrap = true/false, we want to set the line's wrap to true/false (respectively) if we reach the end of the line
@@ -2625,7 +2454,7 @@ OutputCellIterator SCREEN_INFORMATION::WriteRect(const OutputCellIterator it,
     THROW_HR_IF(E_INVALIDARG, viewport.Height() <= 0);
     THROW_HR_IF(E_INVALIDARG, viewport.Width() <= 0);
 
-    OutputCellIterator iter = it;
+    auto iter = it;
     for (auto i = viewport.Top(); i < viewport.BottomExclusive(); i++)
     {
         iter = _textBuffer->WriteLine(iter, { viewport.Left(), i }, false, viewport.RightInclusive());
@@ -2644,15 +2473,15 @@ OutputCellIterator SCREEN_INFORMATION::WriteRect(const OutputCellIterator it,
 // Note:
 // - will throw exception on error.
 void SCREEN_INFORMATION::WriteRect(const OutputCellRect& data,
-                                   const COORD location)
+                                   const til::point location)
 {
-    for (size_t i = 0; i < data.Height(); i++)
+    for (til::CoordType i = 0; i < data.Height(); i++)
     {
         const auto iter = data.GetRowIter(i);
 
-        COORD point;
-        point.X = location.X;
-        point.Y = location.Y + static_cast<short>(i);
+        til::point point;
+        point.x = location.x;
+        point.y = location.y + i;
 
         _textBuffer->WriteLine(iter, point);
     }
@@ -2673,13 +2502,15 @@ void SCREEN_INFORMATION::ClearTextData()
 // - position - location on the screen to get the word boundary for
 // Return Value:
 // - word boundary positions
-std::pair<COORD, COORD> SCREEN_INFORMATION::GetWordBoundary(const COORD position) const
+std::pair<til::point, til::point> SCREEN_INFORMATION::GetWordBoundary(const til::point position) const
 {
-    COORD clampedPosition = position;
+    // The position argument is in screen coordinates, but we need the
+    // equivalent buffer position, taking line rendition into account.
+    auto clampedPosition = _textBuffer->ScreenToBufferPosition(position);
     GetBufferSize().Clamp(clampedPosition);
 
-    COORD start{ clampedPosition };
-    COORD end{ clampedPosition };
+    auto start{ clampedPosition };
+    auto end{ clampedPosition };
 
     // find the start of the word
     auto startIt = GetTextLineDataAt(clampedPosition);
@@ -2690,7 +2521,7 @@ std::pair<COORD, COORD> SCREEN_INFORMATION::GetWordBoundary(const COORD position
         {
             break;
         }
-        --start.X;
+        --start.x;
     }
 
     // find the end of the word
@@ -2702,7 +2533,7 @@ std::pair<COORD, COORD> SCREEN_INFORMATION::GetWordBoundary(const COORD position
             break;
         }
         ++endIt;
-        ++end.X;
+        ++end.x;
     }
 
     // trim leading zeros if we need to
@@ -2725,7 +2556,7 @@ std::pair<COORD, COORD> SCREEN_INFORMATION::GetWordBoundary(const COORD position
             const auto wch = trimIt->front();
 
             // If the string is long enough to have stuff after the 0x/0n and it doesn't have one...
-            if (end.X > start.X + 2 &&
+            if (end.x > start.x + 2 &&
                 wch != L'x' &&
                 wch != L'X' &&
                 wch != L'n')
@@ -2736,14 +2567,20 @@ std::pair<COORD, COORD> SCREEN_INFORMATION::GetWordBoundary(const COORD position
                 // we find a single character '0' to Trim off the leading zeroes.
                 while (trimIt->size() == 1 &&
                        trimIt->front() == L'0' &&
-                       start.X < end.X - 1)
+                       start.x < end.x - 1)
                 {
-                    start.X++;
+                    start.x++;
                     trimIt++;
                 }
             }
         }
     }
+
+    // The calculated range is in buffer coordinates, but the caller is
+    // expecting screen offsets, so we have to convert these back again.
+    start = _textBuffer->BufferToScreenPosition(start);
+    end = _textBuffer->BufferToScreenPosition(end);
+
     return { start, end };
 }
 
@@ -2757,32 +2594,32 @@ const TextBuffer& SCREEN_INFORMATION::GetTextBuffer() const noexcept
     return *_textBuffer;
 }
 
-TextBufferTextIterator SCREEN_INFORMATION::GetTextDataAt(const COORD at) const
+TextBufferTextIterator SCREEN_INFORMATION::GetTextDataAt(const til::point at) const
 {
     return _textBuffer->GetTextDataAt(at);
 }
 
-TextBufferCellIterator SCREEN_INFORMATION::GetCellDataAt(const COORD at) const
+TextBufferCellIterator SCREEN_INFORMATION::GetCellDataAt(const til::point at) const
 {
     return _textBuffer->GetCellDataAt(at);
 }
 
-TextBufferTextIterator SCREEN_INFORMATION::GetTextLineDataAt(const COORD at) const
+TextBufferTextIterator SCREEN_INFORMATION::GetTextLineDataAt(const til::point at) const
 {
     return _textBuffer->GetTextLineDataAt(at);
 }
 
-TextBufferCellIterator SCREEN_INFORMATION::GetCellLineDataAt(const COORD at) const
+TextBufferCellIterator SCREEN_INFORMATION::GetCellLineDataAt(const til::point at) const
 {
     return _textBuffer->GetCellLineDataAt(at);
 }
 
-TextBufferTextIterator SCREEN_INFORMATION::GetTextDataAt(const COORD at, const Viewport limit) const
+TextBufferTextIterator SCREEN_INFORMATION::GetTextDataAt(const til::point at, const Viewport limit) const
 {
     return _textBuffer->GetTextDataAt(at, limit);
 }
 
-TextBufferCellIterator SCREEN_INFORMATION::GetCellDataAt(const COORD at, const Viewport limit) const
+TextBufferCellIterator SCREEN_INFORMATION::GetCellDataAt(const til::point at, const Viewport limit) const
 {
     return _textBuffer->GetCellDataAt(at, limit);
 }
@@ -2815,31 +2652,15 @@ void SCREEN_INFORMATION::InitializeCursorRowAttributes()
     if (_textBuffer)
     {
         const auto& cursor = _textBuffer->GetCursor();
-        ROW& row = _textBuffer->GetRowByOffset(cursor.GetPosition().Y);
+        auto& row = _textBuffer->GetRowByOffset(cursor.GetPosition().y);
         // The VT standard requires that the new row is initialized with
         // the current background color, but with no meta attributes set.
         auto fillAttributes = GetAttributes();
         fillAttributes.SetStandardErase();
-        row.GetAttrRow().SetAttrToEnd(0, fillAttributes);
+        row.SetAttrToEnd(0, fillAttributes);
+        // The row should also be single width to start with.
+        row.SetLineRendition(LineRendition::SingleWidth);
     }
-}
-
-// Method Description:
-// - Moves the viewport to where we last believed the "virtual bottom" was. This
-//      emulates linux terminal behavior, where there's no buffer, only a
-//      viewport. This is called by WriteChars, on output from an application in
-//      VT mode, before the output is processed by the state machine.
-//   This ensures that if a user scrolls around in the buffer, and a client
-//      application uses VT to control the cursor/buffer, those commands are
-//      still processed relative to the coordinates before the user scrolled the buffer.
-// Arguments:
-// - <none>
-// Return Value:
-// - <none>
-void SCREEN_INFORMATION::MoveToBottom()
-{
-    const auto virtualView = GetVirtualViewport();
-    LOG_IF_NTSTATUS_FAILED(SetViewportOrigin(true, virtualView.Origin(), true));
 }
 
 // Method Description:
@@ -2852,8 +2673,8 @@ void SCREEN_INFORMATION::MoveToBottom()
 // - the virtual terminal viewport
 Viewport SCREEN_INFORMATION::GetVirtualViewport() const noexcept
 {
-    const short newTop = _virtualBottom - _viewport.Height() + 1;
-    return Viewport::FromDimensions({ 0, newTop }, _viewport.Dimensions());
+    const auto newTop = _virtualBottom - _viewport.Height() + 1;
+    return Viewport::FromDimensions({ _viewport.Left(), newTop }, _viewport.Dimensions());
 }
 
 // Method Description:
@@ -2863,23 +2684,11 @@ Viewport SCREEN_INFORMATION::GetVirtualViewport() const noexcept
 // - <none>
 // Return Value:
 // - true if the character at the cursor's current position is wide
-bool SCREEN_INFORMATION::CursorIsDoubleWidth() const
+bool SCREEN_INFORMATION::CursorIsDoubleWidth() const noexcept
 {
     const auto& buffer = GetTextBuffer();
     const auto position = buffer.GetCursor().GetPosition();
-    TextBufferTextIterator it(TextBufferCellIterator(buffer, position));
-    return IsGlyphFullWidth(*it);
-}
-
-// Method Description:
-// - Retrieves this buffer's current render target.
-// Arguments:
-// - <none>
-// Return Value:
-// - This buffer's current render target.
-IRenderTarget& SCREEN_INFORMATION::GetRenderTarget() noexcept
-{
-    return _renderTarget;
+    return buffer.GetRowByOffset(position.y).DbcsAttrAt(position.x) != DbcsAttribute::Single;
 }
 
 // Method Description:
@@ -2903,8 +2712,8 @@ const FontInfo& SCREEN_INFORMATION::GetCurrentFont() const noexcept
 // Method Description:
 // - Gets the desired font of the screen buffer. If we try loading this font and
 //      have to fallback to another, then GetCurrentFont()!=GetDesiredFont().
-//      We store this seperately, so that if we need to reload the font, we can
-//      try again with our prefered font info (in the desired font info) instead
+//      We store this separately, so that if we need to reload the font, we can
+//      try again with our preferred font info (in the desired font info) instead
 //      of re-using the looked up value from before.
 // Arguments:
 // - <none>
@@ -2922,51 +2731,16 @@ const FontInfoDesired& SCREEN_INFORMATION::GetDesiredFont() const noexcept
     return _desiredFont;
 }
 
-// Method Description:
-// - Returns true iff the scroll margins have been set.
-// Arguments:
-// - <none>
-// Return Value:
-// - true iff the scroll margins have been set.
-bool SCREEN_INFORMATION::AreMarginsSet() const noexcept
+// Routine Description:
+// - Engages the legacy VT handling quirk; see TextAttribute::StripErroneousVT16VersionsOfLegacyDefaults
+void SCREEN_INFORMATION::SetIgnoreLegacyEquivalentVTAttributes() noexcept
 {
-    return _scrollMargins.BottomInclusive() > _scrollMargins.Top();
+    _ignoreLegacyEquivalentVTAttributes = true;
 }
 
 // Routine Description:
-// - Determines whether a cursor position is within the vertical bounds of the
-//      scroll margins, or the margins aren't set.
-// Parameters:
-// - cursorPosition - The cursor position to test
-// Return value:
-// - true iff the position is in bounds.
-bool SCREEN_INFORMATION::IsCursorInMargins(const COORD cursorPosition) const noexcept
+// - Disengages the legacy VT handling quirk; see TextAttribute::StripErroneousVT16VersionsOfLegacyDefaults
+void SCREEN_INFORMATION::ResetIgnoreLegacyEquivalentVTAttributes() noexcept
 {
-    // If the margins aren't set, then any position is considered in bounds.
-    if (!AreMarginsSet())
-    {
-        return true;
-    }
-    const auto margins = GetAbsoluteScrollMargins().ToInclusive();
-    return cursorPosition.Y <= margins.Bottom && cursorPosition.Y >= margins.Top;
-}
-
-// Method Description:
-// - Gets the region of the buffer that should be used for scrolling within the
-//      scroll margins. If the scroll margins aren't set, it returns the entire
-//      buffer size.
-// Arguments:
-// - <none>
-// Return Value:
-// - The area of the buffer within the scroll margins
-Viewport SCREEN_INFORMATION::GetScrollingRegion() const noexcept
-{
-    const auto buffer = GetBufferSize();
-    const bool marginsSet = AreMarginsSet();
-    const auto marginRect = GetAbsoluteScrollMargins().ToInclusive();
-    const auto margin = Viewport::FromInclusive({ buffer.Left(),
-                                                  marginsSet ? marginRect.Top : buffer.Top(),
-                                                  buffer.RightInclusive(),
-                                                  marginsSet ? marginRect.Bottom : buffer.BottomInclusive() });
-    return margin;
+    _ignoreLegacyEquivalentVTAttributes = false;
 }

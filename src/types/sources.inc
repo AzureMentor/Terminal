@@ -12,7 +12,7 @@
 # Preprocessor Settings
 # -------------------------------------
 
-C_DEFINES               = $(C_DEFINES) -DBUILD_ONECORE_INTERACTIVITY
+C_DEFINES               = $(C_DEFINES)
 
 # -------------------------------------
 # Build System Settings
@@ -29,6 +29,7 @@ PRECOMPILED_INCLUDE     = ..\precomp.h
 
 SOURCES= \
     ..\CodepointWidthDetector.cpp \
+    ..\ColorFix.cpp \
     ..\IInputEvent.cpp \
     ..\FocusEvent.cpp \
     ..\GlyphWidth.cpp \
@@ -39,9 +40,15 @@ SOURCES= \
     ..\Viewport.cpp \
     ..\WindowBufferSizeEvent.cpp \
     ..\convert.cpp \
-    ..\Utf16Parser.cpp \
+    ..\colorTable.cpp \
     ..\utils.cpp \
     ..\ThemeUtils.cpp \
+    ..\ScreenInfoUiaProviderBase.cpp \
+    ..\sgrStack.cpp \
+    ..\UiaTextRangeBase.cpp \
+    ..\UiaTracing.cpp \
+    ..\TermControlUiaProvider.cpp \
+    ..\TermControlUiaTextRange.cpp \
 
 INCLUDES= \
     $(INCLUDES); \

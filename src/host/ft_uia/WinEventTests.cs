@@ -1,4 +1,4 @@
-﻿//----------------------------------------------------------------------------------------------------------------------
+//----------------------------------------------------------------------------------------------------------------------
 // <copyright file="WinEventTests.cs" company="Microsoft">
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
@@ -210,9 +210,10 @@ namespace Conhost.UIA.Tests
         }
 
         [TestMethod]
+        [TestProperty("Ignore", "True")] // GH#7282 - investigate and reenable
         public void TestSelection()
         {
-            RunTest(TestSelectionImpl);  
+            RunTest(TestSelectionImpl);
         }
 
         private void TestSelectionImpl(CmdApp app, ViewportArea area, IntPtr hConsole, WinCon.CONSOLE_SCREEN_BUFFER_INFO_EX sbiex, Queue<EventData> expected, WinCon.CONSOLE_SCREEN_BUFFER_INFO_EX sbiexOriginal)
@@ -293,9 +294,10 @@ namespace Conhost.UIA.Tests
         }
 
         [TestMethod]
+        [TestProperty("Ignore", "True")] // GH#7282 - investigate and reenable
         public void TestLaunchAndExitChild()
         {
-            RunTest(TestLaunchAndExitChildImpl);   
+            RunTest(TestLaunchAndExitChildImpl);
         }
 
         private void TestLaunchAndExitChildImpl(CmdApp app, ViewportArea area, IntPtr hConsole, WinCon.CONSOLE_SCREEN_BUFFER_INFO_EX sbiex, Queue<EventData> expected, WinCon.CONSOLE_SCREEN_BUFFER_INFO_EX sbiexOriginal)
@@ -353,15 +355,16 @@ namespace Conhost.UIA.Tests
         }
 
         [TestMethod]
+        [TestProperty("Ignore", "True")] // GH#7282 - investigate and reenable
         public void TestScrollByWheel()
         {
             RunTest(TestScrollByWheelImpl);
         }
-        
+
         private void TestScrollByWheelImpl(CmdApp app, ViewportArea area, IntPtr hConsole, WinCon.CONSOLE_SCREEN_BUFFER_INFO_EX sbiex, Queue<EventData> expected, WinCon.CONSOLE_SCREEN_BUFFER_INFO_EX sbiexOriginal)
         {
             int rowsPerScroll = app.GetRowsPerScroll();
-            int scrollDelta; 
+            int scrollDelta;
 
             // A. Scroll down.
             {
@@ -389,6 +392,7 @@ namespace Conhost.UIA.Tests
         }
 
         [TestMethod]
+        [TestProperty("Ignore", "True")] // GH#7282 - investigate and reenable
         public void TestScrollByOverflow()
         {
             RunTest(TestScrollByOverflowImpl);

@@ -3,7 +3,7 @@ Copyright (c) Microsoft Corporation
 Licensed under the MIT license.
 
 Module Name:
-- adaptDispatch.hpp
+- InteractDispatch.hpp
 
 Abstract:
 - This serves as the Windows Console API-specific implementation of the
@@ -16,27 +16,28 @@ Author(s):
 
 #include "DispatchTypes.hpp"
 #include "IInteractDispatch.hpp"
-#include "conGetSet.hpp"
+#include "../../host/outputStream.hpp"
 
 namespace Microsoft::Console::VirtualTerminal
 {
     class InteractDispatch : public IInteractDispatch
     {
     public:
-        InteractDispatch(ConGetSet* const pConApi);
+        InteractDispatch();
 
-        ~InteractDispatch() = default;
+        bool WriteInput(std::deque<std::unique_ptr<IInputEvent>>& inputEvents) override;
+        bool WriteCtrlKey(const KeyEvent& event) override;
+        bool WriteString(const std::wstring_view string) override;
+        bool WindowManipulation(const DispatchTypes::WindowManipulationType function,
+                                const VTParameter parameter1,
+                                const VTParameter parameter2) override; // DTTERM_WindowManipulation
+        bool MoveCursor(const VTInt row, const VTInt col) override;
 
-        bool WriteInput(_In_ std::deque<std::unique_ptr<IInputEvent>>& inputEvents) override;
-        bool WriteCtrlC() override;
-        bool WriteString(_In_reads_(cch) const wchar_t* const pws, const size_t cch) override;
-        bool WindowManipulation(const DispatchTypes::WindowManipulationType uiFunction,
-                                _In_reads_(cParams) const unsigned short* const rgusParams,
-                                const size_t cParams) override; // DTTERM_WindowManipulation
-        bool MoveCursor(const unsigned int row,
-                        const unsigned int col) override;
+        bool IsVtInputEnabled() const override;
+
+        bool FocusChanged(const bool focused) const override;
 
     private:
-        std::unique_ptr<ConGetSet> _pConApi;
+        ConhostInternalGetSet _api;
     };
 }

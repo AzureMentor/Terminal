@@ -19,6 +19,8 @@ Revision History:
 
 #include "precomp.h"
 
+#include "conint.h"
+
 #pragma hdrstop
 
 UINT gnCurrentPage;
@@ -54,7 +56,7 @@ BOOL CheckNum(HWND hDlg, UINT Item)
     TCHAR szNum[5];
     BOOL fSigned;
 
-    // The window position corrdinates can be signed, nothing else.
+    // The window position coordinates can be signed, nothing else.
     if (Item == IDD_WINDOW_POSX || Item == IDD_WINDOW_POSY)
     {
         fSigned = TRUE;
@@ -94,7 +96,12 @@ void SaveConsoleSettingsIfNeeded(const HWND hwnd)
             gpStateInfo->FaceName[0] = TEXT('\0');
         }
 
-        if (gpStateInfo->LinkTitle != NULL)
+        if (Microsoft::Console::Internal::DefaultApp::CheckDefaultAppPolicy())
+        {
+            LOG_IF_FAILED(DelegationConfig::s_SetDefaultByPackage(g_selectedPackage));
+        }
+
+        if (gpStateInfo->LinkTitle != nullptr)
         {
             SetGlobalRegistryValues();
             if (!NT_SUCCESS(ShortcutSerialization::s_SetLinkValues(gpStateInfo,
@@ -106,7 +113,7 @@ void SaveConsoleSettingsIfNeeded(const HWND hwnd)
                 WCHAR awchBuffer[MAX_PATH] = { 0 };
                 STARTUPINFOW si;
 
-                // An error occured try to save the link file, display a message box to that effect...
+                // An error occurred try to save the link file, display a message box to that effect...
                 GetStartupInfoW(&si);
                 LoadStringW(ghInstance, IDS_LINKERROR, awchBuffer, ARRAYSIZE(awchBuffer));
                 StringCchPrintf(szMessage,
@@ -173,18 +180,18 @@ void EndDlgPage(const HWND hDlg, const BOOL fSaveNow)
 #define TOOLTIP_MAXLENGTH (256)
 void CreateAndAssociateToolTipToControl(const UINT dlgItem, const HWND hDlg, const UINT idsToolTip)
 {
-    HWND hwndTooltip = CreateWindowEx(0 /*dwExtStyle*/,
+    auto hwndTooltip = CreateWindowEx(0 /*dwExtStyle*/,
                                       TOOLTIPS_CLASS,
-                                      NULL /*lpWindowName*/,
+                                      nullptr /*lpWindowName*/,
                                       TTS_ALWAYSTIP,
                                       CW_USEDEFAULT,
                                       CW_USEDEFAULT,
                                       CW_USEDEFAULT,
                                       CW_USEDEFAULT,
                                       hDlg,
-                                      NULL /*hMenu*/,
+                                      nullptr /*hMenu*/,
                                       ghInstance,
-                                      NULL /*lpParam*/);
+                                      nullptr /*lpParam*/);
 
     if (hwndTooltip)
     {
@@ -245,21 +252,21 @@ BOOL UpdateStateInfo(HWND hDlg, UINT Item, int Value)
     case IDD_WINDOW_POSX:
         if (Value < 0)
         {
-            gpStateInfo->WindowPosX = max(SHORT_MIN, Value);
+            gpStateInfo->WindowPosX = std::max(SHORT_MIN, Value);
         }
         else
         {
-            gpStateInfo->WindowPosX = min(SHORT_MAX, Value);
+            gpStateInfo->WindowPosX = std::min(SHORT_MAX, Value);
         }
         break;
     case IDD_WINDOW_POSY:
         if (Value < 0)
         {
-            gpStateInfo->WindowPosY = max(SHORT_MIN, Value);
+            gpStateInfo->WindowPosY = std::max(SHORT_MIN, Value);
         }
         else
         {
-            gpStateInfo->WindowPosY = min(SHORT_MAX, Value);
+            gpStateInfo->WindowPosY = std::min(SHORT_MAX, Value);
         }
         break;
     case IDD_AUTO_POSITION:
@@ -316,10 +323,10 @@ BOOL UpdateStateInfo(HWND hDlg, UINT Item, int Value)
         gpStateInfo->InsertMode = Value;
         break;
     case IDD_HISTORY_SIZE:
-        gpStateInfo->HistoryBufferSize = max(Value, 1);
+        gpStateInfo->HistoryBufferSize = std::max(Value, 1);
         break;
     case IDD_HISTORY_NUM:
-        gpStateInfo->NumberOfHistoryBuffers = max(Value, 1);
+        gpStateInfo->NumberOfHistoryBuffers = std::max(Value, 1);
         break;
     case IDD_HISTORY_NODUP:
         gpStateInfo->HistoryNoDup = Value;
@@ -386,15 +393,15 @@ BOOL UpdateStateInfo(HWND hDlg, UINT Item, int Value)
 // - This routine allocates a buffer that must be freed.
 PWSTR TranslateConsoleTitle(_In_ PCWSTR pwszConsoleTitle)
 {
-    bool fUnexpand = true;
-    bool fSubstitute = true;
+    auto fUnexpand = true;
+    auto fSubstitute = true;
 
     LPWSTR Tmp = nullptr;
 
     size_t cbConsoleTitle;
     size_t cbSystemRoot;
 
-    LPWSTR pwszSysRoot = new (std::nothrow) wchar_t[MAX_PATH];
+    auto pwszSysRoot = new (std::nothrow) wchar_t[MAX_PATH];
     if (nullptr != pwszSysRoot)
     {
         if (0 != GetWindowsDirectoryW(pwszSysRoot, MAX_PATH))
@@ -402,8 +409,8 @@ PWSTR TranslateConsoleTitle(_In_ PCWSTR pwszConsoleTitle)
             if (SUCCEEDED(StringCbLengthW(pwszConsoleTitle, STRSAFE_MAX_CCH, &cbConsoleTitle)) &&
                 SUCCEEDED(StringCbLengthW(pwszSysRoot, MAX_PATH, &cbSystemRoot)))
             {
-                int const cchSystemRoot = (int)(cbSystemRoot / sizeof(WCHAR));
-                int const cchConsoleTitle = (int)(cbConsoleTitle / sizeof(WCHAR));
+                const auto cchSystemRoot = (int)(cbSystemRoot / sizeof(WCHAR));
+                const auto cchConsoleTitle = (int)(cbConsoleTitle / sizeof(WCHAR));
                 cbConsoleTitle += sizeof(WCHAR); // account for nullptr terminator
 
                 if (fUnexpand &&
@@ -545,7 +552,14 @@ BOOL PopulatePropSheetPageArray(_Out_writes_(cPsps) PROPSHEETPAGE* pPsp, const s
         {
             pTerminalPage->dwSize = sizeof(PROPSHEETPAGE);
             pTerminalPage->hInstance = ghInstance;
-            pTerminalPage->pszTemplate = MAKEINTRESOURCE(DID_TERMINAL);
+            if (Microsoft::Console::Internal::DefaultApp::CheckDefaultAppPolicy())
+            {
+                pTerminalPage->pszTemplate = MAKEINTRESOURCE(DID_TERMINAL_WITH_DEFTERM);
+            }
+            else
+            {
+                pTerminalPage->pszTemplate = MAKEINTRESOURCE(DID_TERMINAL);
+            }
             pTerminalPage->pfnDlgProc = TerminalDlgProc;
             pTerminalPage->lParam = TERMINAL_PAGE_INDEX;
             pTerminalPage->dwFlags = PSP_DEFAULT;
@@ -612,10 +626,19 @@ INT_PTR ConsolePropertySheet(__in HWND hWnd, __in PCONSOLE_STATE_INFO pStateInfo
     RecreateFontHandles(hWnd);
 
     //
+    // Find the available default console/terminal packages
+    //
+
+    if (Microsoft::Console::Internal::DefaultApp::CheckDefaultAppPolicy())
+    {
+        LOG_IF_FAILED(DelegationConfig::s_GetAvailablePackages(g_availablePackages, g_selectedPackage));
+    }
+
+    //
     // Get the current page number
     //
 
-    gnCurrentPage = GetRegistryValues(NULL);
+    gnCurrentPage = GetRegistryValues(nullptr);
 
     //
     // Initialize the property sheet structures
@@ -646,9 +669,9 @@ INT_PTR ConsolePropertySheet(__in HWND hWnd, __in PCONSOLE_STATE_INFO pStateInfo
     psh.hInstance = ghInstance;
     psh.pszCaption = awchBuffer;
     psh.nPages = g_fForceV2 ? NUMBER_OF_PAGES : V1_NUMBER_OF_PAGES;
-    psh.nStartPage = min(gnCurrentPage, ARRAYSIZE(psp));
+    psh.nStartPage = std::min<UINT>(gnCurrentPage, ARRAYSIZE(psp));
     psh.ppsp = psp;
-    psh.pfnCallback = NULL;
+    psh.pfnCallback = nullptr;
 
     //
     // Create the property sheet
@@ -665,7 +688,7 @@ INT_PTR ConsolePropertySheet(__in HWND hWnd, __in PCONSOLE_STATE_INFO pStateInfo
 
     if (!gpStateInfo->Defaults)
     {
-        if (gpStateInfo->OriginalTitle != NULL)
+        if (gpStateInfo->OriginalTitle != nullptr)
         {
             HeapFree(GetProcessHeap(), 0, gpStateInfo->OriginalTitle);
         }
@@ -685,9 +708,9 @@ void RegisterClasses(HINSTANCE hModule)
     wc.lpszClassName = TEXT("SimpleColor");
     wc.hInstance = hModule;
     wc.lpfnWndProc = SimpleColorControlProc;
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hIcon = NULL;
-    wc.lpszMenuName = NULL;
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hIcon = nullptr;
+    wc.lpszMenuName = nullptr;
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.cbClsExtra = 0;
@@ -697,9 +720,9 @@ void RegisterClasses(HINSTANCE hModule)
     wc.lpszClassName = TEXT("ColorTableColor");
     wc.hInstance = hModule;
     wc.lpfnWndProc = ColorTableControlProc;
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hIcon = NULL;
-    wc.lpszMenuName = NULL;
+    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    wc.hIcon = nullptr;
+    wc.lpszMenuName = nullptr;
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.cbClsExtra = 0;

@@ -2,20 +2,20 @@
 // Licensed under the MIT license.
 
 #include <windows.h>
-#include <wil\Common.h>
-#include <wil\result.h>
-#include <wil\resource.h>
-#include <wil\wistd_functional.h>
-#include <wil\wistd_memory.h>
-#include <stdlib.h> /* srand, rand */
-#include <time.h> /* time */
+#include <wil/Common.h>
+#include <wil/result.h>
+#include <wil/resource.h>
+#include <wil/wistd_functional.h>
+#include <wil/wistd_memory.h>
+#include <cstdlib> /* srand, rand */
+#include <ctime> /* time */
 
 #include <deque>
 #include <memory>
 #include <vector>
 #include <string>
 #include <sstream>
-#include <assert.h>
+#include <cassert>
 
 using namespace std;
 ////////////////////////////////////////////////////////////////////////////////
@@ -71,7 +71,7 @@ int __cdecl wmain(int /*argc*/, WCHAR* /*argv[]*/)
         std::string bottomBorder = std::string(width, '=');
 
         int color = 17;
-        int const colorStep = 1;
+        const int colorStep = 1;
         printf("Buffer size is wxh=%dx%d\n", width, height);
         printCSI("s"); // save cursor
         printCSI("H"); // Go Home

@@ -28,7 +28,7 @@ Revision History:
 - From components of output.h/.c
   by Therese Stowell (ThereseS) 1990-1991
 - Pulled into its own file from textBuffer.hpp/cpp (AustDi, 2017)
-- Moved the colors into their own seperate abstraction. (migrie Nov 2018)
+- Moved the colors into their own separate abstraction. (migrie Nov 2018)
 --*/
 
 #pragma once
@@ -37,18 +37,51 @@ Revision History:
 #include "WexTestClass.h"
 #endif
 
-#pragma pack(push, 1)
-
 enum class ColorType : BYTE
 {
-    IsIndex = 0x0,
-    IsDefault = 0x1,
-    IsRgb = 0x2
+    IsIndex256 = 0x0,
+    IsIndex16 = 0x1,
+    IsDefault = 0x2,
+    IsRgb = 0x3
+};
+
+enum class ColorAlias : size_t
+{
+    DefaultForeground,
+    DefaultBackground,
+    FrameForeground,
+    FrameBackground,
+    ENUM_COUNT // must be the last element in the enum class
 };
 
 struct TextColor
 {
 public:
+    static constexpr BYTE DARK_BLACK = 0;
+    static constexpr BYTE DARK_RED = 1;
+    static constexpr BYTE DARK_GREEN = 2;
+    static constexpr BYTE DARK_YELLOW = 3;
+    static constexpr BYTE DARK_BLUE = 4;
+    static constexpr BYTE DARK_MAGENTA = 5;
+    static constexpr BYTE DARK_CYAN = 6;
+    static constexpr BYTE DARK_WHITE = 7;
+    static constexpr BYTE BRIGHT_BLACK = 8;
+    static constexpr BYTE BRIGHT_RED = 9;
+    static constexpr BYTE BRIGHT_GREEN = 10;
+    static constexpr BYTE BRIGHT_YELLOW = 11;
+    static constexpr BYTE BRIGHT_BLUE = 12;
+    static constexpr BYTE BRIGHT_MAGENTA = 13;
+    static constexpr BYTE BRIGHT_CYAN = 14;
+    static constexpr BYTE BRIGHT_WHITE = 15;
+
+    // Entries 256 to 260 are reserved for XTerm compatibility.
+    static constexpr size_t DEFAULT_FOREGROUND = 261;
+    static constexpr size_t DEFAULT_BACKGROUND = 262;
+    static constexpr size_t FRAME_FOREGROUND = 263;
+    static constexpr size_t FRAME_BACKGROUND = 264;
+    static constexpr size_t CURSOR_COLOR = 265;
+    static constexpr size_t TABLE_SIZE = 266;
+
     constexpr TextColor() noexcept :
         _meta{ ColorType::IsDefault },
         _red{ 0 },
@@ -57,9 +90,9 @@ public:
     {
     }
 
-    constexpr TextColor(const BYTE wLegacyAttr) noexcept :
-        _meta{ ColorType::IsIndex },
-        _index{ wLegacyAttr },
+    constexpr TextColor(const BYTE index, const bool isIndex256) noexcept :
+        _meta{ isIndex256 ? ColorType::IsIndex256 : ColorType::IsIndex16 },
+        _index{ index },
         _green{ 0 },
         _blue{ 0 }
     {
@@ -73,47 +106,55 @@ public:
     {
     }
 
-    friend constexpr bool operator==(const TextColor& a, const TextColor& b) noexcept;
-    friend constexpr bool operator!=(const TextColor& a, const TextColor& b) noexcept;
-
-    constexpr bool IsLegacy() const noexcept
+    bool operator==(const TextColor& other) const noexcept
     {
-        return !(IsDefault() || IsRgb());
+        return memcmp(this, &other, sizeof(TextColor)) == 0;
     }
 
-    constexpr bool IsDefault() const noexcept
+    bool operator!=(const TextColor& other) const noexcept
     {
-        return _meta == ColorType::IsDefault;
+        return memcmp(this, &other, sizeof(TextColor)) != 0;
     }
 
-    constexpr bool IsRgb() const noexcept
-    {
-        return _meta == ColorType::IsRgb;
-    }
+    bool CanBeBrightened() const noexcept;
+    bool IsLegacy() const noexcept;
+    bool IsIndex16() const noexcept;
+    bool IsIndex256() const noexcept;
+    bool IsDefault() const noexcept;
+    bool IsRgb() const noexcept;
 
     void SetColor(const COLORREF rgbColor) noexcept;
-    void SetIndex(const BYTE index) noexcept;
+    void SetIndex(const BYTE index, const bool isIndex256) noexcept;
     void SetDefault() noexcept;
 
-    COLORREF GetColor(std::basic_string_view<COLORREF> colorTable,
-                      const COLORREF defaultColor,
-                      const bool brighten) const noexcept;
+    COLORREF GetColor(const std::array<COLORREF, TABLE_SIZE>& colorTable, const size_t defaultIndex, bool brighten = false) const noexcept;
+    BYTE GetLegacyIndex(const BYTE defaultIndex) const noexcept;
 
     constexpr BYTE GetIndex() const noexcept
     {
         return _index;
     }
 
+    COLORREF GetRGB() const noexcept;
+
+    static constexpr BYTE TransposeLegacyIndex(const size_t index)
+    {
+        // When converting a 16-color index in the legacy Windows order to or
+        // from an ANSI-compatible order, we need to swap the bits in positions
+        // 0 and 2. We do this by XORing the index with 00000101, but only if
+        // one (but not both) of those bit positions is set.
+        const auto oneBitSet = (index ^ (index >> 2)) & 1;
+        return gsl::narrow_cast<BYTE>(index ^ oneBitSet ^ (oneBitSet << 2));
+    }
+
 private:
-    ColorType _meta : 2;
     union
     {
         BYTE _red, _index;
     };
     BYTE _green;
     BYTE _blue;
-
-    COLORREF _GetRGB() const noexcept;
+    ColorType _meta;
 
 #ifdef UNIT_TESTING
     friend class TextBufferTests;
@@ -121,21 +162,6 @@ private:
     friend class WEX::TestExecution::VerifyOutputTraits;
 #endif
 };
-
-#pragma pack(pop)
-
-bool constexpr operator==(const TextColor& a, const TextColor& b) noexcept
-{
-    return a._meta == b._meta &&
-           a._red == b._red &&
-           a._green == b._green &&
-           a._blue == b._blue;
-}
-
-bool constexpr operator!=(const TextColor& a, const TextColor& b) noexcept
-{
-    return !(a == b);
-}
 
 #ifdef UNIT_TESTING
 
@@ -155,7 +181,7 @@ namespace WEX
                 }
                 else if (color.IsRgb())
                 {
-                    return WEX::Common::NoThrowString().Format(L"{RGB:0x%06x}", color._GetRGB());
+                    return WEX::Common::NoThrowString().Format(L"{RGB:0x%06x}", color.GetRGB());
                 }
                 else
                 {
@@ -166,5 +192,3 @@ namespace WEX
     }
 }
 #endif
-
-static_assert(sizeof(TextColor) <= 4 * sizeof(BYTE), "We should only need 4B for an entire TextColor. Any more than that is just waste");

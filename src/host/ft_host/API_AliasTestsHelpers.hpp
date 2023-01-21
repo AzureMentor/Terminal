@@ -97,7 +97,7 @@ void TestGetConsoleAliasHelper(TCH* ptszSourceGiven,
         VERIFY_FAIL(L"Unknown type.");
     }
 
-    DWORD const cbExpectedTargetString = (DWORD)TLEN(ptszExpectedTargetGiven) * sizeof(TCH);
+    const DWORD cbExpectedTargetString = (DWORD)TLEN(ptszExpectedTargetGiven) * sizeof(TCH);
 
     switch (dwTarget)
     {
@@ -153,7 +153,7 @@ void TestGetConsoleAliasHelper(TCH* ptszSourceGiven,
     // This is strange because it's a scope exit so we need to declare in the parent scope, then let it go if we didn't actually need it.
     // I just prefer keeping the exit next to the allocation so it doesn't get lost.
     auto removeAliasOnExit = wil::scope_exit([&] {
-        AddConsoleAliasT(ptszSource, NULL, ptszExeName);
+        AddConsoleAliasT(ptszSource, nullptr, ptszExeName);
     });
     if (!bSetFirst)
     {
@@ -194,7 +194,7 @@ void TestGetConsoleAliasHelper(TCH* ptszSourceGiven,
 
 // For some reason, the console API *ALWAYS* says it needs enough space as if we were copying Unicode,
 // even if the final result will be ANSI.
-// Therefore, if we're mathing based on a char size buffer, multiple the expected result by 2.
+// Therefore, if we're matching based on a char size buffer, multiply the expected result by 2.
 #pragma warning(suppress : 4127) // This is a constant, but conditionally compiled twice so we need the check.
         if (1 == sizeof(TCH))
         {
@@ -239,8 +239,8 @@ void TestGetConsoleAliasHelper(TCH* ptszSourceGiven,
 
     // Perform the test
     SetLastError(S_OK);
-    DWORD const dwActualResult = GetConsoleAliasT(ptszSource, ptchTargetBuffer, cbTargetBuffer, ptszExeName);
-    DWORD const dwActualLastError = GetLastError();
+    const auto dwActualResult = GetConsoleAliasT(ptszSource, ptchTargetBuffer, cbTargetBuffer, ptszExeName);
+    const auto dwActualLastError = GetLastError();
 
     VERIFY_ARE_EQUAL(dwExpectedResult, dwActualResult, L"Ensure result code/return value matches expected.");
     VERIFY_ARE_EQUAL(dwExpectedLastError, dwActualLastError, L"Ensure last error code matches expected.");

@@ -3,7 +3,7 @@
 
 #include "precomp.h"
 #include "WexTestClass.h"
-#include "..\..\inc\consoletaeftemplates.hpp"
+#include "../../inc/consoletaeftemplates.hpp"
 
 #include "CommonState.hpp"
 #include "PopupTestHelper.hpp"
@@ -42,21 +42,22 @@ class CommandNumberPopupTests
 
     TEST_METHOD_SETUP(MethodSetup)
     {
-        m_state->PrepareGlobalScreenBuffer();
         m_state->PrepareGlobalInputBuffer();
+        m_state->PrepareGlobalScreenBuffer();
         m_state->PrepareReadHandle();
-        m_state->PrepareCookedReadData();
-        m_pHistory = CommandHistory::s_Allocate(L"cmd.exe", (HANDLE)0);
+        m_pHistory = CommandHistory::s_Allocate(L"cmd.exe", nullptr);
         if (!m_pHistory)
         {
             return false;
         }
+        // History must be prepared before COOKED_READ (as it uses s_Find to get at it)
+        m_state->PrepareCookedReadData();
         return true;
     }
 
     TEST_METHOD_CLEANUP(MethodCleanup)
     {
-        CommandHistory::s_Free((HANDLE)0);
+        CommandHistory::s_Free(nullptr);
         m_pHistory = nullptr;
         m_state->CleanupCookedReadData();
         m_state->CleanupReadHandle();
@@ -104,7 +105,7 @@ class CommandNumberPopupTests
     TEST_METHOD(CanDismissAllPopups)
     {
         Log::Comment(L"that that all popups are dismissed when CommandNumberPopup is dismissed");
-        // CommanNumberPopup is the only popup that can act as a 2nd popup. make sure that it dismisses all
+        // CommandNumberPopup is the only popup that can act as a 2nd popup. make sure that it dismisses all
         // popups when exiting
         // function to simulate user pressing escape key
         Popup::UserInputFunction fn = [](COOKED_READ_DATA& /*cookedReadData*/, bool& popupKey, DWORD& modifiers, wchar_t& wch) {
@@ -165,7 +166,7 @@ class CommandNumberPopupTests
 
         // the buffer should contain the least recent history item
 
-        const std::wstring_view expected = m_pHistory->GetLastCommand();
+        const auto expected = m_pHistory->GetLastCommand();
         const std::wstring resultString(buffer, buffer + expected.size());
         VERIFY_ARE_EQUAL(expected, resultString);
     }
@@ -179,7 +180,7 @@ class CommandNumberPopupTests
                                                          bool& popupKey,
                                                          DWORD& modifiers,
                                                          wchar_t& wch) {
-                static bool needReturn = false;
+                static auto needReturn = false;
                 popupKey = false;
                 modifiers = 0;
                 if (!needReturn)
@@ -224,7 +225,7 @@ class CommandNumberPopupTests
 
         // simulates user pressing 1, 2, 3, 4, 5, enter
         Popup::UserInputFunction fn = [](COOKED_READ_DATA& /*cookedReadData*/, bool& popupKey, DWORD& modifiers, wchar_t& wch) {
-            static int num = 1;
+            static auto num = 1;
             popupKey = false;
             modifiers = 0;
             if (num <= 5)
@@ -257,7 +258,7 @@ class CommandNumberPopupTests
 
         // the buffer should contain the most recent history item
 
-        const std::wstring_view expected = m_pHistory->GetLastCommand();
+        const auto expected = m_pHistory->GetLastCommand();
         const std::wstring resultString(buffer, buffer + expected.size());
         VERIFY_ARE_EQUAL(expected, resultString);
     }

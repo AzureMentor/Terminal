@@ -24,7 +24,6 @@ class TextBuffer;
 class Cursor final
 {
 public:
-    static const unsigned int s_InvertCursorColor = INVALID_COLOR;
     // the following values are used to create the textmode cursor.
     static constexpr unsigned int CURSOR_SMALL_SIZE = 25; // large enough to be one pixel on a six pixel font
 
@@ -37,7 +36,7 @@ public:
     Cursor& operator=(const Cursor&) & = delete;
 
     Cursor(Cursor&&) = default;
-    Cursor& operator=(Cursor&&) & = default;
+    Cursor& operator=(Cursor&&) & = delete;
 
     bool HasMoved() const noexcept;
     bool IsVisible() const noexcept;
@@ -48,13 +47,12 @@ public:
     bool IsPopupShown() const noexcept;
     bool GetDelay() const noexcept;
     ULONG GetSize() const noexcept;
-    COORD GetPosition() const noexcept;
+    til::point GetPosition() const noexcept;
 
     const CursorType GetType() const noexcept;
-    const bool IsUsingColor() const noexcept;
-    const COLORREF GetColor() const noexcept;
 
     void StartDeferDrawing() noexcept;
+    bool IsDeferDrawing() noexcept;
     void EndDeferDrawing() noexcept;
 
     void SetHasMoved(const bool fHasMoved) noexcept;
@@ -66,34 +64,33 @@ public:
     void SetIsPopupShown(const bool fIsPopupShown) noexcept;
     void SetDelay(const bool fDelay) noexcept;
     void SetSize(const ULONG ulSize) noexcept;
-    void SetStyle(const ULONG ulSize, const COLORREF color, const CursorType type) noexcept;
+    void SetStyle(const ULONG ulSize, const CursorType type) noexcept;
 
-    void SetPosition(const COORD cPosition) noexcept;
-    void SetXPosition(const int NewX) noexcept;
-    void SetYPosition(const int NewY) noexcept;
-    void IncrementXPosition(const int DeltaX) noexcept;
-    void IncrementYPosition(const int DeltaY) noexcept;
-    void DecrementXPosition(const int DeltaX) noexcept;
-    void DecrementYPosition(const int DeltaY) noexcept;
+    void SetPosition(const til::point cPosition) noexcept;
+    void SetXPosition(const til::CoordType NewX) noexcept;
+    void SetYPosition(const til::CoordType NewY) noexcept;
+    void IncrementXPosition(const til::CoordType DeltaX) noexcept;
+    void IncrementYPosition(const til::CoordType DeltaY) noexcept;
+    void DecrementXPosition(const til::CoordType DeltaX) noexcept;
+    void DecrementYPosition(const til::CoordType DeltaY) noexcept;
 
     void CopyProperties(const Cursor& OtherCursor) noexcept;
 
-    void DelayEOLWrap(const COORD coordDelayedAt) noexcept;
+    void DelayEOLWrap(const til::point coordDelayedAt) noexcept;
     void ResetDelayEOLWrap() noexcept;
-    COORD GetDelayedAtPosition() const noexcept;
+    til::point GetDelayedAtPosition() const noexcept;
     bool IsDelayedEOLWrap() const noexcept;
 
-    void SetColor(const unsigned int color) noexcept;
     void SetType(const CursorType type) noexcept;
 
 private:
     TextBuffer& _parentBuffer;
 
-    //TODO: seperate the rendering and text placement
+    //TODO: separate the rendering and text placement
 
     // NOTE: If you are adding a property here, go add it to CopyProperties.
 
-    COORD _cPosition; // current position on screen (in screen buffer coords).
+    til::point _cPosition; // current position on screen (in screen buffer coords).
 
     bool _fHasMoved;
     bool _fIsVisible; // whether cursor is visible (set only through the API)
@@ -105,7 +102,7 @@ private:
     bool _fIsPopupShown; // if a popup is being shown, turn off, stop blinking.
 
     bool _fDelayedEolWrap; // don't wrap at EOL till the next char comes in.
-    COORD _coordDelayedAt; // coordinate the EOL wrap was delayed at.
+    til::point _coordDelayedAt; // coordinate the EOL wrap was delayed at.
 
     bool _fDeferCursorRedraw; // whether we should defer redrawing the cursor or not
     bool _fHaveDeferredCursorRedraw; // have we been asked to redraw the cursor while it was being deferred?
@@ -116,6 +113,4 @@ private:
     void _RedrawCursorAlways() noexcept;
 
     CursorType _cursorType;
-    bool _fUseColor;
-    COLORREF _color;
 };

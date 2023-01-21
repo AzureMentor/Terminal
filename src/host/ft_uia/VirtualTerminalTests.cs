@@ -57,7 +57,7 @@ namespace Conhost.UIA.Tests
                 reg.BackupRegistry(); // we're going to modify the virtual terminal state for this, so back it up first.
                 VersionSelector.SetConsoleVersion(reg, ConsoleVersion.V2);
                 reg.SetDefaultValue(VIRTUAL_TERMINAL_KEY_NAME, VIRTUAL_TERMINAL_ON_VALUE);
-                
+
                 bool haveVtAppPath = !string.IsNullOrEmpty(vtAppLocation);
 
                 Verify.IsTrue(haveVtAppPath, "Ensure that we passed in the location to VtApp.exe");
@@ -114,12 +114,12 @@ namespace Conhost.UIA.Tests
             Log.Comment("Move cursor to the middle-ish");
             Point cursorExpected = new Point();
             // H is at 5, 1. VT coords are 1-based and buffer is 0-based so adjust.
-            cursorExpected.Y = 5 - 1; 
+            cursorExpected.Y = 5 - 1;
             cursorExpected.X = 1 - 1;
             app.UIRoot.SendKeys("H");
 
             // Move to middle-ish from here. 10 Bs and 10 Cs should about do it.
-            for (int i=0; i < 10; i++)
+            for (int i = 0; i < 10; i++)
             {
                 app.UIRoot.SendKeys("BC");
                 cursorExpected.Y++;
@@ -381,23 +381,23 @@ namespace Conhost.UIA.Tests
             ciActual = area.GetCharInfoAt(hConsole, pt);
             Verify.AreEqual(ciExpected, ciActual, "Verify that background bright cyan  got set.");
 
-            Log.Comment("Set underline (SGR.4)");
+            Log.Comment("Set overline (SGR.53)");
             app.FillCursorPosition(hConsole, ref pt);
             app.UIRoot.SendKeys("e`");
 
-            ciExpected.Attributes |= WinCon.CONSOLE_ATTRIBUTES.COMMON_LVB_UNDERSCORE;
+            ciExpected.Attributes |= WinCon.CONSOLE_ATTRIBUTES.COMMON_LVB_GRID_HORIZONTAL;
 
             ciActual = area.GetCharInfoAt(hConsole, pt);
-            Verify.AreEqual(ciExpected, ciActual, "Verify that underline got set.");
+            Verify.AreEqual(ciExpected, ciActual, "Verify that overline got set.");
 
-            Log.Comment("Clear underline (SGR.24)");
+            Log.Comment("Clear overline (SGR.55)");
             app.FillCursorPosition(hConsole, ref pt);
             app.UIRoot.SendKeys("d`");
 
-            ciExpected.Attributes &= ~WinCon.CONSOLE_ATTRIBUTES.COMMON_LVB_UNDERSCORE;
+            ciExpected.Attributes &= ~WinCon.CONSOLE_ATTRIBUTES.COMMON_LVB_GRID_HORIZONTAL;
 
             ciActual = area.GetCharInfoAt(hConsole, pt);
-            Verify.AreEqual(ciExpected, ciActual, "Verify that underline got cleared.");
+            Verify.AreEqual(ciExpected, ciActual, "Verify that overline got cleared.");
 
             Log.Comment("Set negative image video (SGR.7)");
             app.FillCursorPosition(hConsole, ref pt);
@@ -426,14 +426,14 @@ namespace Conhost.UIA.Tests
             ciActual = area.GetCharInfoAt(hConsole, pt);
             Verify.AreEqual(ciExpected, ciActual, "Verify that we got set back to the original state.");
 
-            Log.Comment("Set multiple properties in the same message (SGR.1,37,43,4)");
+            Log.Comment("Set multiple properties in the same message (SGR.1,37,43,53)");
             app.FillCursorPosition(hConsole, ref pt);
             app.UIRoot.SendKeys("9`");
 
             ciExpected.Attributes |= WinCon.CONSOLE_ATTRIBUTES.FOREGROUND_COLORS;
             ciExpected.Attributes |= WinCon.CONSOLE_ATTRIBUTES.FOREGROUND_INTENSITY;
             ciExpected.Attributes |= WinCon.CONSOLE_ATTRIBUTES.BACKGROUND_YELLOW;
-            ciExpected.Attributes |= WinCon.CONSOLE_ATTRIBUTES.COMMON_LVB_UNDERSCORE;
+            ciExpected.Attributes |= WinCon.CONSOLE_ATTRIBUTES.COMMON_LVB_GRID_HORIZONTAL;
 
             ciActual = area.GetCharInfoAt(hConsole, pt);
             Verify.AreEqual(ciExpected, ciActual, "Verify that we set foreground bright white, background yellow, and underscore in the same SGR command.");
@@ -715,7 +715,7 @@ namespace Conhost.UIA.Tests
         }
 
         delegate char GetExpectedChar(int rowId, int colId, int height, int width);
-        
+
         private static void ScreenFillHelper(CmdApp app, ViewportArea area, IntPtr hConsole)
         {
             Log.Comment("Fill screen with junk");

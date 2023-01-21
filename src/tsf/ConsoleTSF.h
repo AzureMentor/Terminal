@@ -33,17 +33,17 @@ class CConsoleTSF final :
 {
 public:
     CConsoleTSF(HWND hwndConsole,
-                GetSuggestionWindowPos pfnPosition) :
+                GetSuggestionWindowPos pfnPosition,
+                GetTextBoxAreaPos pfnTextArea) :
         _hwndConsole(hwndConsole),
         _pfnPosition(pfnPosition),
+        _pfnTextArea(pfnTextArea),
         _cRef(1),
         _tid()
     {
     }
 
-    virtual ~CConsoleTSF()
-    {
-    }
+    virtual ~CConsoleTSF() = default;
     [[nodiscard]] HRESULT Initialize();
     void Uninitialize();
 
@@ -66,21 +66,27 @@ public:
         return S_OK;
     }
 
+    // This returns Rectangle of the text box of whole console.
+    // When a user taps inside the rectangle while hardware keyboard is not available,
+    // touch keyboard is invoked.
     STDMETHODIMP GetScreenExt(RECT* pRect)
     {
         if (pRect)
         {
-            *pRect = _pfnPosition();
+            *pRect = _pfnTextArea();
         }
 
         return S_OK;
     }
 
+    // This returns rectangle of current command line edit area.
+    // When a user types in East Asian language, candidate window is shown at this position.
+    // Emoji and more panel (Win+.) is shown at the position, too.
     STDMETHODIMP GetTextExt(LONG, LONG, RECT* pRect, BOOL* pbClipped)
     {
         if (pRect)
         {
-            GetScreenExt(pRect);
+            *pRect = _pfnPosition();
         }
 
         if (pbClipped)
@@ -119,9 +125,9 @@ public:
     STDMETHODIMP OnActivated(DWORD dwProfileType, LANGID langid, REFCLSID clsid, REFGUID catid, REFGUID guidProfile, HKL hkl, DWORD dwFlags);
 
     // ITfUIElementSink methods
-    STDMETHODIMP BeginUIElement(DWORD dwUIELementId, BOOL* pbShow);
-    STDMETHODIMP UpdateUIElement(DWORD dwUIELementId);
-    STDMETHODIMP EndUIElement(DWORD dwUIELementId);
+    STDMETHODIMP BeginUIElement(DWORD dwUIElementId, BOOL* pbShow);
+    STDMETHODIMP UpdateUIElement(DWORD dwUIElementId);
+    STDMETHODIMP EndUIElement(DWORD dwUIElementId);
 
     // ITfCleanupContextSink methods
     STDMETHODIMP OnCleanupContext(TfEditCookie ecWrite, ITfContext* pic);
@@ -151,10 +157,10 @@ public:
             // Close (terminate) any open compositions when losing the input focus.
             if (_spITfInputContext)
             {
-                wil::com_ptr_nothrow<ITfContextOwnerCompositionServices> spCompositionServices(_spITfInputContext.try_query<ITfContextOwnerCompositionServices>());
+                auto spCompositionServices = _spITfInputContext.try_query<ITfContextOwnerCompositionServices>();
                 if (spCompositionServices)
                 {
-                    spCompositionServices->TerminateComposition(NULL);
+                    spCompositionServices->TerminateComposition(nullptr);
                 }
             }
         }
@@ -198,6 +204,7 @@ private:
     // Console info.
     HWND _hwndConsole;
     GetSuggestionWindowPos _pfnPosition;
+    GetTextBoxAreaPos _pfnTextArea;
 
     // Miscellaneous flags
     BOOL _fModifyingDoc = FALSE; // Set TRUE, when calls ITfRange::SetText

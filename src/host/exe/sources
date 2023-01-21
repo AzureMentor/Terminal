@@ -21,12 +21,18 @@ UMENTRY                 = wwinmain
 TARGET_DESTINATION      = retail
 
 # -------------------------------------
+# Build System Settings
+# -------------------------------------
+
+CETCOMPAT=1
+
+# -------------------------------------
 # Sources, Headers, and Libraries
 # -------------------------------------
 
 SOURCES = \
     $(SOURCES) \
-    ..\exemain.cpp \
+    exemain.cpp \
     ..\res.rc \
 
 # -------------------------------------

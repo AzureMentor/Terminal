@@ -18,34 +18,36 @@ Author(s):
 
 #include "XtermEngine.hpp"
 
+class VtApiRoutines;
+
 namespace Microsoft::Console::Render
 {
     class Xterm256Engine : public XtermEngine
     {
     public:
         Xterm256Engine(_In_ wil::unique_hfile hPipe,
-                       const Microsoft::Console::IDefaultColorProvider& colorProvider,
-                       const Microsoft::Console::Types::Viewport initialViewport,
-                       _In_reads_(cColorTable) const COLORREF* const ColorTable,
-                       const WORD cColorTable);
+                       const Microsoft::Console::Types::Viewport initialViewport);
 
         virtual ~Xterm256Engine() override = default;
 
-        [[nodiscard]] HRESULT UpdateDrawingBrushes(const COLORREF colorForeground,
-                                                   const COLORREF colorBackground,
-                                                   const WORD legacyColorAttribute,
-                                                   const ExtendedAttributes extendedAttrs,
+        [[nodiscard]] HRESULT UpdateDrawingBrushes(const TextAttribute& textAttributes,
+                                                   const RenderSettings& renderSettings,
+                                                   const gsl::not_null<IRenderData*> pData,
+                                                   const bool usingSoftFont,
                                                    const bool isSettingDefaultBrushes) noexcept override;
 
-    private:
-        [[nodiscard]] HRESULT _UpdateExtendedAttrs(const ExtendedAttributes extendedAttrs) noexcept;
+        [[nodiscard]] HRESULT ManuallyClearScrollback() noexcept override;
 
-        // We're only using Italics, Blinking, Invisible and Crossed Out for now
-        // See GH#2916 for adding a more complete implementation.
-        ExtendedAttributes _lastExtendedAttrsState;
+        friend class ::VtApiRoutines;
+
+    private:
+        [[nodiscard]] HRESULT _UpdateExtendedAttrs(const TextAttribute& textAttributes) noexcept;
+        [[nodiscard]] HRESULT _UpdateHyperlinkAttr(const TextAttribute& textAttributes,
+                                                   const gsl::not_null<IRenderData*> pData) noexcept;
 
 #ifdef UNIT_TESTING
         friend class VtRendererTest;
+        friend class ConptyOutputTests;
 #endif
     };
 }

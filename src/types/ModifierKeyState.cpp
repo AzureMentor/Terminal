@@ -9,7 +9,7 @@
 // Routine Description:
 // - checks if flag is present in flags
 // Arguments:
-// - flags - bit battern to check for flag
+// - flags - bit pattern to check for flag
 // - flag - bit pattern to search for
 // Return Value:
 // - true if flag is present in flags
@@ -107,7 +107,7 @@ std::unordered_set<ModifierKeyState> FromConsoleControlKeyFlags(const DWORD flag
 {
     std::unordered_set<ModifierKeyState> keyStates;
 
-    for (const ModifierKeyStateMapping& mapping : ModifierKeyStateTranslationTable)
+    for (const auto& mapping : ModifierKeyStateTranslationTable)
     {
         if (RuntimeIsFlagSet(flags, mapping.second))
         {
@@ -126,7 +126,7 @@ std::unordered_set<ModifierKeyState> FromConsoleControlKeyFlags(const DWORD flag
 // - console bitflag associated with modifierKey
 DWORD ToConsoleControlKeyFlag(const ModifierKeyState modifierKey) noexcept
 {
-    for (const ModifierKeyStateMapping& mapping : ModifierKeyStateTranslationTable)
+    for (const auto& mapping : ModifierKeyStateTranslationTable)
     {
         if (mapping.first == modifierKey)
         {

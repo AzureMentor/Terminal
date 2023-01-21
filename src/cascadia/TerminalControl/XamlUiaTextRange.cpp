@@ -3,7 +3,14 @@
 
 #include "pch.h"
 #include "XamlUiaTextRange.h"
-#include "UiaTextRange.hpp"
+#include "../types/TermControlUiaTextRange.hpp"
+#include <UIAutomationClient.h>
+#include <UIAutomationCoreApi.h>
+#include "../types/UiaTracing.h"
+
+// the same as COR_E_NOTSUPPORTED
+// we don't want to import the CLR headers to get it
+#define XAML_E_NOT_SUPPORTED 0x80131515L
 
 namespace UIA
 {
@@ -22,7 +29,7 @@ namespace XamlAutomation
     using winrt::Windows::UI::Xaml::Automation::Text::TextUnit;
 }
 
-namespace winrt::Microsoft::Terminal::TerminalControl::implementation
+namespace winrt::Microsoft::Terminal::Control::implementation
 {
     XamlAutomation::ITextRangeProvider XamlUiaTextRange::Clone() const
     {
@@ -69,26 +76,75 @@ namespace winrt::Microsoft::Terminal::TerminalControl::implementation
         throw winrt::hresult_not_implemented();
     }
 
-    XamlAutomation::ITextRangeProvider XamlUiaTextRange::FindText(winrt::hstring /*text*/,
-                                                                  bool /*searchBackward*/,
-                                                                  bool /*ignoreCase*/)
+    XamlAutomation::ITextRangeProvider XamlUiaTextRange::FindText(winrt::hstring text,
+                                                                  bool searchBackward,
+                                                                  bool ignoreCase)
     {
-        // TODO GitHub #605: Search functionality
-        // we need to wrap this around the UiaTextRange FindText() function
-        // but right now it returns E_NOTIMPL, so let's just return nullptr for now.
-        throw winrt::hresult_not_implemented();
+        UIA::ITextRangeProvider* pReturn;
+        const auto queryText = wil::make_bstr(text.c_str());
+
+        THROW_IF_FAILED(_uiaProvider->FindText(queryText.get(), searchBackward, ignoreCase, &pReturn));
+
+        auto xutr = winrt::make_self<XamlUiaTextRange>(pReturn, _parentProvider);
+        return *xutr;
     }
 
     winrt::Windows::Foundation::IInspectable XamlUiaTextRange::GetAttributeValue(int32_t textAttributeId) const
     {
-        // Copied functionality from Types::UiaTextRange.cpp
-        if (textAttributeId == UIA_IsReadOnlyAttributeId)
+        // Call the function off of the underlying UiaTextRange.
+        VARIANT result;
+        THROW_IF_FAILED(_uiaProvider->GetAttributeValue(textAttributeId, &result));
+
+        // Convert the resulting VARIANT into a format that is consumable by XAML.
+        switch (result.vt)
         {
-            return winrt::box_value(false);
+        case VT_BSTR:
+        {
+            return box_value(result.bstrVal);
         }
-        else
+        case VT_I4:
         {
-            return nullptr;
+            // Surprisingly, `long` is _not_ a WinRT type.
+            // So we have to use `int32_t` to make sure this is output properly.
+            // Otherwise, you'll get "Attribute does not exist" out the other end.
+            return box_value<int32_t>(result.lVal);
+        }
+        case VT_R8:
+        {
+            return box_value(result.dblVal);
+        }
+        case VT_BOOL:
+        {
+            return box_value<bool>(result.boolVal);
+        }
+        case VT_UNKNOWN:
+        {
+            // This one is particularly special.
+            // We might return a special value like UiaGetReservedMixedAttributeValue
+            //  or UiaGetReservedNotSupportedValue.
+            // Some text attributes may return a real value, however, none of those
+            //  are supported at this time.
+            // So we need to figure out what was actually intended to be returned.
+
+            com_ptr<IUnknown> mixedAttributeVal;
+            UiaGetReservedMixedAttributeValue(mixedAttributeVal.put());
+
+            if (result.punkVal == mixedAttributeVal.get())
+            {
+                return Windows::UI::Xaml::DependencyProperty::UnsetValue();
+            }
+
+            [[fallthrough]];
+        }
+        default:
+        {
+            // We _need_ to return XAML_E_NOT_SUPPORTED here.
+            // Returning nullptr is an improper implementation of it being unsupported.
+            // UIA Clients rely on this HRESULT to signify that the requested attribute is undefined.
+            // Anything else will result in the UIA Client refusing to read when navigating by word
+            // Magically, this doesn't affect other forms of navigation...
+            winrt::throw_hresult(XAML_E_NOT_SUPPORTED);
+        }
         }
     }
 
@@ -107,13 +163,13 @@ namespace winrt::Microsoft::Terminal::TerminalControl::implementation
             THROW_IF_FAILED(SafeArrayGetLBound(pReturnVal, 1, &lBound));
             THROW_IF_FAILED(SafeArrayGetUBound(pReturnVal, 1, &uBound));
 
-            long count = uBound - lBound + 1;
+            auto count = uBound - lBound + 1;
 
             std::vector<double> vec;
             vec.reserve(count);
-            for (int i = 0; i < count; i++)
+            for (auto i = 0; i < count; i++)
             {
-                double element = pVals[i];
+                auto element = pVals[i];
                 vec.push_back(element);
             }
 
@@ -127,6 +183,7 @@ namespace winrt::Microsoft::Terminal::TerminalControl::implementation
 
     XamlAutomation::IRawElementProviderSimple XamlUiaTextRange::GetEnclosingElement()
     {
+        ::Microsoft::Console::Types::UiaTracing::TextRange::GetEnclosingElement(*static_cast<::Microsoft::Console::Types::UiaTextRangeBase*>(_uiaProvider.get()));
         return _parentProvider;
     }
 

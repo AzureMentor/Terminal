@@ -17,82 +17,132 @@ namespace Microsoft::Console::VirtualTerminal
     class TermDispatch;
 };
 
+#pragma warning(disable : 26440) // Making these methods noexcept would require the same of all derived classes
+
 class Microsoft::Console::VirtualTerminal::TermDispatch : public Microsoft::Console::VirtualTerminal::ITermDispatch
 {
 public:
-    void Execute(const wchar_t wchControl) override = 0;
     void Print(const wchar_t wchPrintable) override = 0;
-    void PrintString(const wchar_t* const rgwch, const size_t cch) override = 0;
+    void PrintString(const std::wstring_view string) override = 0;
 
-    bool CursorUp(const unsigned int /*uiDistance*/) override { return false; } // CUU
-    bool CursorDown(const unsigned int /*uiDistance*/) override { return false; } // CUD
-    bool CursorForward(const unsigned int /*uiDistance*/) override { return false; } // CUF
-    bool CursorBackward(const unsigned int /*uiDistance*/) override { return false; } // CUB
-    bool CursorNextLine(const unsigned int /*uiDistance*/) override { return false; } // CNL
-    bool CursorPrevLine(const unsigned int /*uiDistance*/) override { return false; } // CPL
-    bool CursorHorizontalPositionAbsolute(const unsigned int /*uiColumn*/) override { return false; } // CHA
-    bool VerticalLinePositionAbsolute(const unsigned int /*uiLine*/) override { return false; } // VPA
-    bool CursorPosition(const unsigned int /*uiLine*/, const unsigned int /*uiColumn*/) override { return false; } // CUP
+    bool CursorUp(const VTInt /*distance*/) override { return false; } // CUU
+    bool CursorDown(const VTInt /*distance*/) override { return false; } // CUD
+    bool CursorForward(const VTInt /*distance*/) override { return false; } // CUF
+    bool CursorBackward(const VTInt /*distance*/) override { return false; } // CUB, BS
+    bool CursorNextLine(const VTInt /*distance*/) override { return false; } // CNL
+    bool CursorPrevLine(const VTInt /*distance*/) override { return false; } // CPL
+    bool CursorHorizontalPositionAbsolute(const VTInt /*column*/) override { return false; } // HPA, CHA
+    bool VerticalLinePositionAbsolute(const VTInt /*line*/) override { return false; } // VPA
+    bool HorizontalPositionRelative(const VTInt /*distance*/) override { return false; } // HPR
+    bool VerticalPositionRelative(const VTInt /*distance*/) override { return false; } // VPR
+    bool CursorPosition(const VTInt /*line*/, const VTInt /*column*/) override { return false; } // CUP, HVP
     bool CursorSaveState() override { return false; } // DECSC
     bool CursorRestoreState() override { return false; } // DECRC
-    bool CursorVisibility(const bool /*fIsVisible*/) override { return false; } // DECTCEM
-    bool InsertCharacter(const unsigned int /*uiCount*/) override { return false; } // ICH
-    bool DeleteCharacter(const unsigned int /*uiCount*/) override { return false; } // DCH
-    bool ScrollUp(const unsigned int /*uiDistance*/) override { return false; } // SU
-    bool ScrollDown(const unsigned int /*uiDistance*/) override { return false; } // SD
-    bool InsertLine(const unsigned int /*uiDistance*/) override { return false; } // IL
-    bool DeleteLine(const unsigned int /*uiDistance*/) override { return false; } // DL
-    bool SetColumns(const unsigned int /*uiColumns*/) override { return false; } // DECSCPP, DECCOLM
-    bool SetCursorKeysMode(const bool /*fApplicationMode*/) override { return false; } // DECCKM
-    bool SetKeypadMode(const bool /*fApplicationMode*/) override { return false; } // DECKPAM, DECKPNM
-    bool EnableCursorBlinking(const bool /*fEnable*/) override { return false; } // ATT610
-    bool SetOriginMode(const bool /*fRelativeMode*/) override { return false; }; // DECOM
-    bool SetTopBottomScrollingMargins(const SHORT /*sTopMargin*/, const SHORT /*sBottomMargin*/) override { return false; } // DECSTBM
+    bool InsertCharacter(const VTInt /*count*/) override { return false; } // ICH
+    bool DeleteCharacter(const VTInt /*count*/) override { return false; } // DCH
+    bool ScrollUp(const VTInt /*distance*/) override { return false; } // SU
+    bool ScrollDown(const VTInt /*distance*/) override { return false; } // SD
+    bool InsertLine(const VTInt /*distance*/) override { return false; } // IL
+    bool DeleteLine(const VTInt /*distance*/) override { return false; } // DL
+    bool SetKeypadMode(const bool /*applicationMode*/) override { return false; } // DECKPAM, DECKPNM
+    bool SetAnsiMode(const bool /*ansiMode*/) override { return false; } // DECANM
+    bool SetTopBottomScrollingMargins(const VTInt /*topMargin*/, const VTInt /*bottomMargin*/) override { return false; } // DECSTBM
+    bool WarningBell() override { return false; } // BEL
+    bool CarriageReturn() override { return false; } // CR
+    bool LineFeed(const DispatchTypes::LineFeedType /*lineFeedType*/) override { return false; } // IND, NEL, LF, FF, VT
     bool ReverseLineFeed() override { return false; } // RI
     bool SetWindowTitle(std::wstring_view /*title*/) override { return false; } // OscWindowTitle
-    bool UseAlternateScreenBuffer() override { return false; } // ASBSET
-    bool UseMainScreenBuffer() override { return false; } // ASBRST
     bool HorizontalTabSet() override { return false; } // HTS
-    bool ForwardTab(const SHORT /*sNumTabs*/) override { return false; } // CHT
-    bool BackwardsTab(const SHORT /*sNumTabs*/) override { return false; } // CBT
-    bool TabClear(const SHORT /*sClearType*/) override { return false; } // TBC
-    bool EnableDECCOLMSupport(const bool /*fEnabled*/) override { return false; } // ?40
-    bool EnableVT200MouseMode(const bool /*fEnabled*/) override { return false; } // ?1000
-    bool EnableUTF8ExtendedMouseMode(const bool /*fEnabled*/) override { return false; } // ?1005
-    bool EnableSGRExtendedMouseMode(const bool /*fEnabled*/) override { return false; } // ?1006
-    bool EnableButtonEventMouseMode(const bool /*fEnabled*/) override { return false; } // ?1002
-    bool EnableAnyEventMouseMode(const bool /*fEnabled*/) override { return false; } // ?1003
-    bool EnableAlternateScroll(const bool /*fEnabled*/) override { return false; } // ?1007
-    bool SetColorTableEntry(const size_t /*tableIndex*/, const DWORD /*dwColor*/) override { return false; } // OSCColorTable
-    bool SetDefaultForeground(const DWORD /*dwColor*/) override { return false; } // OSCDefaultForeground
-    bool SetDefaultBackground(const DWORD /*dwColor*/) override { return false; } // OSCDefaultBackground
+    bool ForwardTab(const VTInt /*numTabs*/) override { return false; } // CHT, HT
+    bool BackwardsTab(const VTInt /*numTabs*/) override { return false; } // CBT
+    bool TabClear(const DispatchTypes::TabClearType /*clearType*/) override { return false; } // TBC
+    bool SetColorTableEntry(const size_t /*tableIndex*/, const DWORD /*color*/) override { return false; } // OSCColorTable
+    bool SetDefaultForeground(const DWORD /*color*/) override { return false; } // OSCDefaultForeground
+    bool SetDefaultBackground(const DWORD /*color*/) override { return false; } // OSCDefaultBackground
+    bool AssignColor(const DispatchTypes::ColorItem /*item*/, const VTInt /*fgIndex*/, const VTInt /*bgIndex*/) override { return false; } // DECAC
 
     bool EraseInDisplay(const DispatchTypes::EraseType /* eraseType*/) override { return false; } // ED
     bool EraseInLine(const DispatchTypes::EraseType /* eraseType*/) override { return false; } // EL
-    bool EraseCharacters(const unsigned int /*uiNumChars*/) override { return false; } // ECH
+    bool EraseCharacters(const VTInt /*numChars*/) override { return false; } // ECH
+    bool SelectiveEraseInDisplay(const DispatchTypes::EraseType /*eraseType*/) override { return false; } // DECSED
+    bool SelectiveEraseInLine(const DispatchTypes::EraseType /*eraseType*/) override { return false; } // DECSEL
 
-    bool SetGraphicsRendition(_In_reads_(_Param_(2)) const DispatchTypes::GraphicsOptions* const /*rgOptions*/,
-                              const size_t /*cOptions*/) override { return false; } // SGR
+    bool ChangeAttributesRectangularArea(const VTInt /*top*/, const VTInt /*left*/, const VTInt /*bottom*/, const VTInt /*right*/, const VTParameters /*attrs*/) override { return false; } // DECCARA
+    bool ReverseAttributesRectangularArea(const VTInt /*top*/, const VTInt /*left*/, const VTInt /*bottom*/, const VTInt /*right*/, const VTParameters /*attrs*/) override { return false; } // DECRARA
+    bool CopyRectangularArea(const VTInt /*top*/, const VTInt /*left*/, const VTInt /*bottom*/, const VTInt /*right*/, const VTInt /*page*/, const VTInt /*dstTop*/, const VTInt /*dstLeft*/, const VTInt /*dstPage*/) override { return false; } // DECCRA
+    bool FillRectangularArea(const VTParameter /*ch*/, const VTInt /*top*/, const VTInt /*left*/, const VTInt /*bottom*/, const VTInt /*right*/) override { return false; } // DECFRA
+    bool EraseRectangularArea(const VTInt /*top*/, const VTInt /*left*/, const VTInt /*bottom*/, const VTInt /*right*/) override { return false; } // DECERA
+    bool SelectiveEraseRectangularArea(const VTInt /*top*/, const VTInt /*left*/, const VTInt /*bottom*/, const VTInt /*right*/) override { return false; } // DECSERA
+    bool SelectAttributeChangeExtent(const DispatchTypes::ChangeExtent /*changeExtent*/) override { return false; } // DECSACE
 
-    bool SetPrivateModes(_In_reads_(_Param_(2)) const DispatchTypes::PrivateModeParams* const /*rgParams*/,
-                         const size_t /*cParams*/) override { return false; } // DECSET
+    bool SetGraphicsRendition(const VTParameters /*options*/) override { return false; } // SGR
+    bool SetLineRendition(const LineRendition /*rendition*/) override { return false; } // DECSWL, DECDWL, DECDHL
+    bool SetCharacterProtectionAttribute(const VTParameters /*options*/) override { return false; } // DECSCA
 
-    bool ResetPrivateModes(_In_reads_(_Param_(2)) const DispatchTypes::PrivateModeParams* const /*rgParams*/,
-                           const size_t /*cParams*/) override { return false; } // DECRST
+    bool PushGraphicsRendition(const VTParameters /*options*/) override { return false; } // XTPUSHSGR
+    bool PopGraphicsRendition() override { return false; } // XTPOPSGR
 
-    bool DeviceStatusReport(const DispatchTypes::AnsiStatusType /*statusType*/) override { return false; } // DSR
-    bool DeviceAttributes() override { return false; } // DA
+    bool SetMode(const DispatchTypes::ModeParams /*param*/) override { return false; } // SM, DECSET
+    bool ResetMode(const DispatchTypes::ModeParams /*param*/) override { return false; } // RM, DECRST
+    bool RequestMode(const DispatchTypes::ModeParams /*param*/) override { return false; } // DECRQM
 
-    bool DesignateCharset(const wchar_t /*wchCharset*/) override { return false; } // DesignateCharset
+    bool DeviceStatusReport(const DispatchTypes::StatusType /*statusType*/, const VTParameter /*id*/) override { return false; } // DSR
+    bool DeviceAttributes() override { return false; } // DA1
+    bool SecondaryDeviceAttributes() override { return false; } // DA2
+    bool TertiaryDeviceAttributes() override { return false; } // DA3
+    bool Vt52DeviceAttributes() override { return false; } // VT52 Identify
+    bool RequestTerminalParameters(const DispatchTypes::ReportingPermission /*permission*/) override { return false; } // DECREQTPARM
+
+    bool DesignateCodingSystem(const VTID /*codingSystem*/) override { return false; } // DOCS
+    bool Designate94Charset(const VTInt /*gsetNumber*/, const VTID /*charset*/) override { return false; } // SCS
+    bool Designate96Charset(const VTInt /*gsetNumber*/, const VTID /*charset*/) override { return false; } // SCS
+    bool LockingShift(const VTInt /*gsetNumber*/) override { return false; } // LS0, LS1, LS2, LS3
+    bool LockingShiftRight(const VTInt /*gsetNumber*/) override { return false; } // LS1R, LS2R, LS3R
+    bool SingleShift(const VTInt /*gsetNumber*/) override { return false; } // SS2, SS3
+    bool AcceptC1Controls(const bool /*enabled*/) override { return false; } // DECAC1
 
     bool SoftReset() override { return false; } // DECSTR
     bool HardReset() override { return false; } // RIS
+    bool ScreenAlignmentPattern() override { return false; } // DECALN
 
     bool SetCursorStyle(const DispatchTypes::CursorStyle /*cursorStyle*/) override { return false; } // DECSCUSR
-    bool SetCursorColor(const COLORREF /*Color*/) override { return false; } // OSCSetCursorColor, OSCResetCursorColor
+    bool SetCursorColor(const COLORREF /*color*/) override { return false; } // OSCSetCursorColor, OSCResetCursorColor
+
+    bool SetClipboard(std::wstring_view /*content*/) override { return false; } // OscSetClipboard
 
     // DTTERM_WindowManipulation
-    bool WindowManipulation(const DispatchTypes::WindowManipulationType /*uiFunction*/,
-                            _In_reads_(_Param_(3)) const unsigned short* const /*rgusParams*/,
-                            const size_t /*cParams*/) override { return false; }
+    bool WindowManipulation(const DispatchTypes::WindowManipulationType /*function*/,
+                            const VTParameter /*parameter1*/,
+                            const VTParameter /*parameter2*/) override { return false; }
+
+    bool AddHyperlink(const std::wstring_view /*uri*/, const std::wstring_view /*params*/) override { return false; }
+    bool EndHyperlink() override { return false; }
+
+    bool DoConEmuAction(const std::wstring_view /*string*/) override { return false; }
+
+    bool DoITerm2Action(const std::wstring_view /*string*/) override { return false; }
+
+    bool DoFinalTermAction(const std::wstring_view /*string*/) override { return false; }
+
+    StringHandler DownloadDRCS(const VTInt /*fontNumber*/,
+                               const VTParameter /*startChar*/,
+                               const DispatchTypes::DrcsEraseControl /*eraseControl*/,
+                               const DispatchTypes::DrcsCellMatrix /*cellMatrix*/,
+                               const DispatchTypes::DrcsFontSet /*fontSet*/,
+                               const DispatchTypes::DrcsFontUsage /*fontUsage*/,
+                               const VTParameter /*cellHeight*/,
+                               const DispatchTypes::DrcsCharsetSize /*charsetSize*/) override { return nullptr; } // DECDLD
+
+    StringHandler DefineMacro(const VTInt /*macroId*/,
+                              const DispatchTypes::MacroDeleteControl /*deleteControl*/,
+                              const DispatchTypes::MacroEncoding /*encoding*/) override { return nullptr; } // DECDMAC
+    bool InvokeMacro(const VTInt /*macroId*/) override { return false; } // DECINVM
+
+    StringHandler RestoreTerminalState(const DispatchTypes::ReportFormat /*format*/) override { return nullptr; }; // DECRSTS
+
+    StringHandler RequestSetting() override { return nullptr; }; // DECRQSS
+
+    bool PlaySounds(const VTParameters /*parameters*/) override { return false; }; // DECPS
 };
+
+#pragma warning(default : 26440) // Restore "can be declared noexcept" warning

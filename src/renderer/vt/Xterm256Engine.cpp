@@ -9,12 +9,8 @@ using namespace Microsoft::Console::Render;
 using namespace Microsoft::Console::Types;
 
 Xterm256Engine::Xterm256Engine(_In_ wil::unique_hfile hPipe,
-                               const IDefaultColorProvider& colorProvider,
-                               const Viewport initialViewport,
-                               _In_reads_(cColorTable) const COLORREF* const ColorTable,
-                               const WORD cColorTable) :
-    XtermEngine(std::move(hPipe), colorProvider, initialViewport, ColorTable, cColorTable, false),
-    _lastExtendedAttrsState{ ExtendedAttributes::Normal }
+                               const Viewport initialViewport) :
+    XtermEngine(std::move(hPipe), initialViewport, false)
 {
 }
 
@@ -22,91 +18,174 @@ Xterm256Engine::Xterm256Engine(_In_ wil::unique_hfile hPipe,
 // - Write a VT sequence to change the current colors of text. Writes true RGB
 //      color sequences.
 // Arguments:
-// - colorForeground: The RGB Color to use to paint the foreground text.
-// - colorBackground: The RGB Color to use to paint the background of the text.
-// - legacyColorAttribute: A console attributes bit field specifying the brush
-//      colors we should use.
-// - extendedAttrs - extended text attributes (italic, underline, etc.) to use.
+// - textAttributes - Text attributes to use for the colors and character rendition
+// - renderSettings - The color table and modes required for rendering
+// - pData - The interface to console data structures required for rendering
+// - usingSoftFont - Whether we're rendering characters from a soft font
 // - isSettingDefaultBrushes: indicates if we should change the background color of
 //      the window. Unused for VT
 // Return Value:
 // - S_OK if we succeeded, else an appropriate HRESULT for failing to allocate or write.
-[[nodiscard]] HRESULT Xterm256Engine::UpdateDrawingBrushes(const COLORREF colorForeground,
-                                                           const COLORREF colorBackground,
-                                                           const WORD legacyColorAttribute,
-                                                           const ExtendedAttributes extendedAttrs,
-                                                           const bool /*isSettingDefaultBrushes*/) noexcept
+[[nodiscard]] HRESULT Xterm256Engine::UpdateDrawingBrushes(const TextAttribute& textAttributes,
+                                                           const RenderSettings& /*renderSettings*/,
+                                                           const gsl::not_null<IRenderData*> pData,
+                                                           const bool usingSoftFont,
+                                                           const bool isSettingDefaultBrushes) noexcept
 {
-    //When we update the brushes, check the wAttrs to see if the LVB_UNDERSCORE
-    //      flag is there. If the state of that flag is different then our
-    //      current state, change the underlining state.
-    // We have to do this here, instead of in PaintBufferGridLines, because
-    //      we'll have already painted the text by the time PaintBufferGridLines
-    //      is called.
-    // TODO:GH#2915 Treat underline separately from LVB_UNDERSCORE
-    RETURN_IF_FAILED(_UpdateUnderline(legacyColorAttribute));
+    RETURN_HR_IF(S_FALSE, _passthrough && isSettingDefaultBrushes);
+
+    RETURN_IF_FAILED(VtEngine::_RgbUpdateDrawingBrushes(textAttributes));
+
+    RETURN_IF_FAILED(_UpdateHyperlinkAttr(textAttributes, pData));
+
+    // If we're using a soft font, it should have already been mapped into the
+    // G1 table, so we just need to switch between G0 and G1 when turning the
+    // soft font on and off. We don't want to do this when setting the default
+    // brushes, though, because that could result in an unnecessary G0 switch
+    // at the start of every frame.
+    if (usingSoftFont != _usingSoftFont && !isSettingDefaultBrushes)
+    {
+        RETURN_IF_FAILED(_Write(usingSoftFont ? "\x0E" : "\x0F"));
+        _usingSoftFont = usingSoftFont;
+    }
 
     // Only do extended attributes in xterm-256color, as to not break telnet.exe.
-    RETURN_IF_FAILED(_UpdateExtendedAttrs(extendedAttrs));
-
-    return VtEngine::_RgbUpdateDrawingBrushes(colorForeground,
-                                              colorBackground,
-                                              WI_IsFlagSet(extendedAttrs, ExtendedAttributes::Bold),
-                                              _ColorTable,
-                                              _cColorTable);
+    return _UpdateExtendedAttrs(textAttributes);
 }
 
 // Routine Description:
-// - Write a VT sequence to either start or stop underlining text.
+// - Write a VT sequence to update the character rendition attributes.
 // Arguments:
-// - legacyColorAttribute: A console attributes bit field containing information
-//      about the underlining state of the text.
+// - textAttributes - text attributes (intense, italic, underline, etc.) to use.
 // Return Value:
 // - S_OK if we succeeded, else an appropriate HRESULT for failing to allocate or write.
-[[nodiscard]] HRESULT Xterm256Engine::_UpdateExtendedAttrs(const ExtendedAttributes extendedAttrs) noexcept
+[[nodiscard]] HRESULT Xterm256Engine::_UpdateExtendedAttrs(const TextAttribute& textAttributes) noexcept
 {
-    // Helper lambda to check if a state (attr) has changed since it's last
-    // value (lastState), and appropriately start/end that state with the given
-    // begin/end functions.
-    auto updateFlagAndState = [extendedAttrs, this](const ExtendedAttributes attr,
-                                                    std::function<HRESULT(Xterm256Engine*)> beginFn,
-                                                    std::function<HRESULT(Xterm256Engine*)> endFn) -> HRESULT {
-        const bool flagSet = WI_AreAllFlagsSet(extendedAttrs, attr);
-        const bool lastState = WI_AreAllFlagsSet(_lastExtendedAttrsState, attr);
-        if (flagSet != lastState)
-        {
-            if (flagSet)
-            {
-                RETURN_IF_FAILED(beginFn(this));
-            }
-            else
-            {
-                RETURN_IF_FAILED(endFn(this));
-            }
-            WI_ToggleAllFlags(_lastExtendedAttrsState, attr);
-        }
-        return S_OK;
-    };
+    // Turning off Intense and Faint must be handled at the same time,
+    // since there is only one sequence that resets both of them.
+    const auto intenseTurnedOff = !textAttributes.IsIntense() && _lastTextAttributes.IsIntense();
+    const auto faintTurnedOff = !textAttributes.IsFaint() && _lastTextAttributes.IsFaint();
+    if (intenseTurnedOff || faintTurnedOff)
+    {
+        RETURN_IF_FAILED(_SetIntense(false));
+        _lastTextAttributes.SetIntense(false);
+        _lastTextAttributes.SetFaint(false);
+    }
 
-    auto hr = updateFlagAndState(ExtendedAttributes::Italics,
-                                 &Xterm256Engine::_BeginItalics,
-                                 &Xterm256Engine::_EndItalics);
-    RETURN_IF_FAILED(hr);
+    // Once we've handled the cases where they need to be turned off,
+    // we can then check if either should be turned back on again.
+    if (textAttributes.IsIntense() && !_lastTextAttributes.IsIntense())
+    {
+        RETURN_IF_FAILED(_SetIntense(true));
+        _lastTextAttributes.SetIntense(true);
+    }
+    if (textAttributes.IsFaint() && !_lastTextAttributes.IsFaint())
+    {
+        RETURN_IF_FAILED(_SetFaint(true));
+        _lastTextAttributes.SetFaint(true);
+    }
 
-    hr = updateFlagAndState(ExtendedAttributes::Blinking,
-                            &Xterm256Engine::_BeginBlink,
-                            &Xterm256Engine::_EndBlink);
-    RETURN_IF_FAILED(hr);
+    // Turning off the underline styles must be handled at the same time,
+    // since there is only one sequence that resets both of them.
+    const auto singleTurnedOff = !textAttributes.IsUnderlined() && _lastTextAttributes.IsUnderlined();
+    const auto doubleTurnedOff = !textAttributes.IsDoublyUnderlined() && _lastTextAttributes.IsDoublyUnderlined();
+    if (singleTurnedOff || doubleTurnedOff)
+    {
+        RETURN_IF_FAILED(_SetUnderlined(false));
+        _lastTextAttributes.SetUnderlined(false);
+        _lastTextAttributes.SetDoublyUnderlined(false);
+    }
 
-    hr = updateFlagAndState(ExtendedAttributes::Invisible,
-                            &Xterm256Engine::_BeginInvisible,
-                            &Xterm256Engine::_EndInvisible);
-    RETURN_IF_FAILED(hr);
+    // Once we've handled the cases where they need to be turned off,
+    // we can then check if either should be turned back on again.
+    if (textAttributes.IsUnderlined() && !_lastTextAttributes.IsUnderlined())
+    {
+        RETURN_IF_FAILED(_SetUnderlined(true));
+        _lastTextAttributes.SetUnderlined(true);
+    }
+    if (textAttributes.IsDoublyUnderlined() && !_lastTextAttributes.IsDoublyUnderlined())
+    {
+        RETURN_IF_FAILED(_SetDoublyUnderlined(true));
+        _lastTextAttributes.SetDoublyUnderlined(true);
+    }
 
-    hr = updateFlagAndState(ExtendedAttributes::CrossedOut,
-                            &Xterm256Engine::_BeginCrossedOut,
-                            &Xterm256Engine::_EndCrossedOut);
-    RETURN_IF_FAILED(hr);
+    if (textAttributes.IsOverlined() != _lastTextAttributes.IsOverlined())
+    {
+        RETURN_IF_FAILED(_SetOverlined(textAttributes.IsOverlined()));
+        _lastTextAttributes.SetOverlined(textAttributes.IsOverlined());
+    }
+
+    if (textAttributes.IsItalic() != _lastTextAttributes.IsItalic())
+    {
+        RETURN_IF_FAILED(_SetItalic(textAttributes.IsItalic()));
+        _lastTextAttributes.SetItalic(textAttributes.IsItalic());
+    }
+
+    if (textAttributes.IsBlinking() != _lastTextAttributes.IsBlinking())
+    {
+        RETURN_IF_FAILED(_SetBlinking(textAttributes.IsBlinking()));
+        _lastTextAttributes.SetBlinking(textAttributes.IsBlinking());
+    }
+
+    if (textAttributes.IsInvisible() != _lastTextAttributes.IsInvisible())
+    {
+        RETURN_IF_FAILED(_SetInvisible(textAttributes.IsInvisible()));
+        _lastTextAttributes.SetInvisible(textAttributes.IsInvisible());
+    }
+
+    if (textAttributes.IsCrossedOut() != _lastTextAttributes.IsCrossedOut())
+    {
+        RETURN_IF_FAILED(_SetCrossedOut(textAttributes.IsCrossedOut()));
+        _lastTextAttributes.SetCrossedOut(textAttributes.IsCrossedOut());
+    }
+
+    if (textAttributes.IsReverseVideo() != _lastTextAttributes.IsReverseVideo())
+    {
+        RETURN_IF_FAILED(_SetReverseVideo(textAttributes.IsReverseVideo()));
+        _lastTextAttributes.SetReverseVideo(textAttributes.IsReverseVideo());
+    }
 
     return S_OK;
+}
+
+// Routine Description:
+// - Write a VT sequence to start/stop a hyperlink
+// Arguments:
+// - textAttributes - Text attributes to use for the hyperlink ID
+// - pData - The interface to console data structures required for rendering
+// Return Value:
+// - S_OK if we succeeded, else an appropriate HRESULT for failing to allocate or write.
+HRESULT Microsoft::Console::Render::Xterm256Engine::_UpdateHyperlinkAttr(const TextAttribute& textAttributes,
+                                                                         const gsl::not_null<IRenderData*> pData) noexcept
+{
+    if (textAttributes.GetHyperlinkId() != _lastTextAttributes.GetHyperlinkId())
+    {
+        if (textAttributes.IsHyperlink())
+        {
+            const auto id = textAttributes.GetHyperlinkId();
+            const auto customId = pData->GetHyperlinkCustomId(id);
+            RETURN_IF_FAILED(_SetHyperlink(pData->GetHyperlinkUri(id), customId, id));
+        }
+        else
+        {
+            RETURN_IF_FAILED(_EndHyperlink());
+        }
+        _lastTextAttributes.SetHyperlinkId(textAttributes.GetHyperlinkId());
+    }
+
+    return S_OK;
+}
+
+// Method Description:
+// - Manually emit a "Erase Scrollback" sequence to the connected terminal. We
+//   need to do this in certain cases that we've identified where we believe the
+//   client wanted the entire terminal buffer cleared, not just the viewport.
+//   For more information, see GH#3126.
+// Arguments:
+// - <none>
+// Return Value:
+// - S_OK if we wrote the sequences successfully, otherwise an appropriate HRESULT
+[[nodiscard]] HRESULT Xterm256Engine::ManuallyClearScrollback() noexcept
+{
+    return _ClearScrollback();
 }

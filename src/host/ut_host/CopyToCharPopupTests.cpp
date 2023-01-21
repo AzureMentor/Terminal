@@ -3,7 +3,7 @@
 
 #include "precomp.h"
 #include "WexTestClass.h"
-#include "..\..\inc\consoletaeftemplates.hpp"
+#include "../../inc/consoletaeftemplates.hpp"
 
 #include "CommonState.hpp"
 #include "PopupTestHelper.hpp"
@@ -41,21 +41,22 @@ class CopyToCharPopupTests
 
     TEST_METHOD_SETUP(MethodSetup)
     {
-        m_state->PrepareGlobalScreenBuffer();
         m_state->PrepareGlobalInputBuffer();
+        m_state->PrepareGlobalScreenBuffer();
         m_state->PrepareReadHandle();
-        m_state->PrepareCookedReadData();
-        m_pHistory = CommandHistory::s_Allocate(L"cmd.exe", (HANDLE)0);
+        m_pHistory = CommandHistory::s_Allocate(L"cmd.exe", nullptr);
         if (!m_pHistory)
         {
             return false;
         }
+        // History must be prepared before COOKED_READ (as it uses s_Find to get at it)
+        m_state->PrepareCookedReadData();
         return true;
     }
 
     TEST_METHOD_CLEANUP(MethodCleanup)
     {
-        CommandHistory::s_Free((HANDLE)0);
+        CommandHistory::s_Free(nullptr);
         m_pHistory = nullptr;
         m_state->CleanupCookedReadData();
         m_state->CleanupReadHandle();
@@ -193,7 +194,7 @@ class CopyToCharPopupTests
         cookedReadData._commandHistory = m_pHistory;
 
         const wchar_t* const expectedBufPtr = cookedReadData._bufPtr;
-        const size_t expectedBytesRead = cookedReadData._bytesRead;
+        const auto expectedBytesRead = cookedReadData._bytesRead;
 
         VERIFY_ARE_EQUAL(popup.Process(cookedReadData), static_cast<NTSTATUS>(CONSOLE_STATUS_WAIT_NO_BLOCK));
 

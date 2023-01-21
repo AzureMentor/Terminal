@@ -13,12 +13,12 @@ Author:
 
 #pragma once
 
-#include <wil\common.h>
-#include <wil\resource.h>
+#include <wil/common.h>
+#include <wil/resource.h>
 
 #ifndef ALTNUMPAD_BIT
 // from winconp.h
-#define ALTNUMPAD_BIT 0x04000000 // AltNumpad OEM char (copied from ntuser\inc\kbd.h)
+#define ALTNUMPAD_BIT 0x04000000 // AltNumpad OEM char (copied from ntuser/inc/kbd.h)
 #endif
 
 #include <wtypes.h>
@@ -62,9 +62,7 @@ public:
 #endif
 };
 
-inline IInputEvent::~IInputEvent()
-{
-}
+inline IInputEvent::~IInputEvent() = default;
 
 #ifdef UNIT_TESTING
 std::wostream& operator<<(std::wostream& stream, const IInputEvent* pEvent);
@@ -177,11 +175,41 @@ public:
     {
     }
 
+    static std::pair<KeyEvent, KeyEvent> MakePair(
+        const WORD repeatCount,
+        const WORD virtualKeyCode,
+        const WORD virtualScanCode,
+        const wchar_t charData,
+        const DWORD activeModifierKeys)
+    {
+        return std::make_pair<KeyEvent, KeyEvent>(
+            { true,
+              repeatCount,
+              virtualKeyCode,
+              virtualScanCode,
+              charData,
+              activeModifierKeys },
+            { false,
+              repeatCount,
+              virtualKeyCode,
+              virtualScanCode,
+              charData,
+              activeModifierKeys });
+    }
+
     ~KeyEvent();
     KeyEvent(const KeyEvent&) = default;
     KeyEvent(KeyEvent&&) = default;
+// For these two operators, there seems to be a bug in the compiler:
+// See https://stackoverflow.com/a/60206505/1481137
+//   > C.128 applies only to virtual member functions, but operator= is not
+//   > virtual in your base class and neither does it have the same signature as
+//   > in the derived class, so there is no reason for it to apply.
+#pragma warning(push)
+#pragma warning(disable : 26456)
     KeyEvent& operator=(const KeyEvent&) & = default;
     KeyEvent& operator=(KeyEvent&&) & = default;
+#pragma warning(pop)
 
     INPUT_RECORD ToInputRecord() const noexcept override;
     InputEventType EventType() const noexcept override;
@@ -267,9 +295,32 @@ public:
     void SetActiveModifierKeys(const DWORD activeModifierKeys) noexcept;
     void DeactivateModifierKey(const ModifierKeyState modifierKey) noexcept;
     void ActivateModifierKey(const ModifierKeyState modifierKey) noexcept;
-    bool DoActiveModifierKeysMatch(const std::unordered_set<ModifierKeyState>& consoleModifiers) const;
+    bool DoActiveModifierKeysMatch(const std::unordered_set<ModifierKeyState>& consoleModifiers) const noexcept;
     bool IsCommandLineEditingKey() const noexcept;
     bool IsPopupKey() const noexcept;
+
+    // Function Description:
+    // - Returns true if the given VKey represents a modifier key - shift, alt,
+    //   control or the Win key.
+    // Arguments:
+    // - vkey: the VKEY to check
+    // Return Value:
+    // - true iff the key is a modifier key.
+    constexpr static bool IsModifierKey(const WORD vkey)
+    {
+        return (vkey == VK_CONTROL) ||
+               (vkey == VK_LCONTROL) ||
+               (vkey == VK_RCONTROL) ||
+               (vkey == VK_MENU) ||
+               (vkey == VK_LMENU) ||
+               (vkey == VK_RMENU) ||
+               (vkey == VK_SHIFT) ||
+               (vkey == VK_LSHIFT) ||
+               (vkey == VK_RSHIFT) ||
+               // There is no VK_WIN
+               (vkey == VK_LWIN) ||
+               (vkey == VK_RWIN);
+    };
 
 private:
     bool _keyDown;
@@ -303,14 +354,14 @@ class MouseEvent : public IInputEvent
 {
 public:
     constexpr MouseEvent(const MOUSE_EVENT_RECORD& record) :
-        _position{ record.dwMousePosition },
+        _position{ til::wrap_coord(record.dwMousePosition) },
         _buttonState{ record.dwButtonState },
         _activeModifierKeys{ record.dwControlKeyState },
         _eventFlags{ record.dwEventFlags }
     {
     }
 
-    constexpr MouseEvent(const COORD position,
+    constexpr MouseEvent(const til::point position,
                          const DWORD buttonState,
                          const DWORD activeModifierKeys,
                          const DWORD eventFlags) :
@@ -335,7 +386,7 @@ public:
         return _eventFlags == MOUSE_MOVED;
     }
 
-    constexpr COORD GetPosition() const noexcept
+    constexpr til::point GetPosition() const noexcept
     {
         return _position;
     }
@@ -355,13 +406,13 @@ public:
         return _eventFlags;
     }
 
-    void SetPosition(const COORD position) noexcept;
+    void SetPosition(const til::point position) noexcept;
     void SetButtonState(const DWORD buttonState) noexcept;
     void SetActiveModifierKeys(const DWORD activeModifierKeys) noexcept;
     void SetEventFlags(const DWORD eventFlags) noexcept;
 
 private:
-    COORD _position;
+    til::point _position;
     DWORD _buttonState;
     DWORD _activeModifierKeys;
     DWORD _eventFlags;
@@ -379,11 +430,11 @@ class WindowBufferSizeEvent : public IInputEvent
 {
 public:
     constexpr WindowBufferSizeEvent(const WINDOW_BUFFER_SIZE_RECORD& record) :
-        _size{ record.dwSize }
+        _size{ til::wrap_coord_size(record.dwSize) }
     {
     }
 
-    constexpr WindowBufferSizeEvent(const COORD size) :
+    constexpr WindowBufferSizeEvent(const til::size size) :
         _size{ size }
     {
     }
@@ -397,15 +448,15 @@ public:
     INPUT_RECORD ToInputRecord() const noexcept override;
     InputEventType EventType() const noexcept override;
 
-    constexpr COORD GetSize() const noexcept
+    constexpr til::size GetSize() const noexcept
     {
         return _size;
     }
 
-    void SetSize(const COORD size) noexcept;
+    void SetSize(const til::size size) noexcept;
 
 private:
-    COORD _size;
+    til::size _size;
 
 #ifdef UNIT_TESTING
     friend std::wostream& operator<<(std::wostream& stream, const WindowBufferSizeEvent* const pEvent);
@@ -461,12 +512,14 @@ class FocusEvent : public IInputEvent
 {
 public:
     constexpr FocusEvent(const FOCUS_EVENT_RECORD& record) :
-        _focus{ !!record.bSetFocus }
+        _focus{ !!record.bSetFocus },
+        _cameFromApi{ true }
     {
     }
 
     constexpr FocusEvent(const bool focus) :
-        _focus{ focus }
+        _focus{ focus },
+        _cameFromApi{ false }
     {
     }
 
@@ -486,8 +539,15 @@ public:
 
     void SetFocus(const bool focus) noexcept;
 
+    // BODGY - see FocusEvent.cpp for details.
+    constexpr bool CameFromApi() const noexcept
+    {
+        return _cameFromApi;
+    }
+
 private:
     bool _focus;
+    bool _cameFromApi;
 
 #ifdef UNIT_TESTING
     friend std::wostream& operator<<(std::wostream& stream, const FocusEvent* const pFocusEvent);

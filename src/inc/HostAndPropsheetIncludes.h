@@ -4,6 +4,10 @@
 
 // clang-format off
 
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN // If this is not defined, windows.h includes commdlg.h which defines FindText globally and conflicts with UIAutomation ITextRangeProvider.
+#endif
+
 // Define and then undefine WIN32_NO_STATUS because windows.h has no guard to prevent it from double defing certain statuses
 // when included with ntstatus.h
 #define WIN32_NO_STATUS
@@ -34,6 +38,14 @@ typedef NTSTATUS *PNTSTATUS;
 #endif
 
 #include <winuser.h>
+
+#define VkKeyScanW DO_NOT_USE_VkKeyScanW_USE_OneCoreSafeVkKeyScanW
+#define MapVirtualKeyW DO_NOT_USE_MapVirtualKeyW_USE_OneCoreSafeMapVirtualKeyW
+#define GetKeyState DO_NOT_USE_GetKeyState_USE_OneCoreSafeGetKeyState
+
+// This header contains some overrides for win32 APIs
+// that cannot exist on OneCore
+#include "../interactivity/inc/VtApiRedirection.hpp"
 
 #include <cwchar>
 

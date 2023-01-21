@@ -1,4 +1,4 @@
-﻿// <copyright file="NativeMethods.cs" company="Microsoft Corporation">
+// <copyright file="NativeMethods.cs" company="Microsoft Corporation">
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 // </copyright>
@@ -37,6 +37,11 @@ namespace Microsoft.Terminal.Wpf
             WM_MOUSEACTIVATE = 0x0021,
 
             /// <summary>
+            /// The WM_GETOBJECT message is sent by Active Accessibility when a client calls AccessibleObjectFromWindow or any of the other AccessibleObjectFromX APIs that retrieve an interface to an object.
+            /// </summary>
+            WM_GETOBJECT = 0x003D,
+
+            /// <summary>
             /// The WM_WINDOWPOSCHANGED message is sent to a window whose size, position, or place in the Z order has changed as a result of a call to the SetWindowPos function or another window-management function.
             /// </summary>
             WM_WINDOWPOSCHANGED = 0x0047,
@@ -47,9 +52,24 @@ namespace Microsoft.Terminal.Wpf
             WM_KEYDOWN = 0x0100,
 
             /// <summary>
+            /// The WM_KEYUP message is posted to the window with the keyboard focus when a nonsystem key is released. A nonsystem key is a key that is pressed when the ALT key is not pressed, or a keyboard key that is pressed when a window has the keyboard focus.
+            /// </summary>
+            WM_KEYUP = 0x0101,
+
+            /// <summary>
             /// The WM_CHAR message is posted to the window with the keyboard focus when a WM_KEYDOWN message is translated by the TranslateMessage function. The WM_CHAR message contains the character code of the key that was pressed.
             /// </summary>
             WM_CHAR = 0x0102,
+
+            /// <summary>
+            /// The WM_SYSKEYDOWN message is posted to the window with the keyboard focus when a system key is pressed. A system key is F10 or Alt+Something.
+            /// </summary>
+            WM_SYSKEYDOWN = 0x0104,
+
+            /// <summary>
+            /// The WM_SYSKEYDOWN message is posted to the window with the keyboard focus when a system key is released. A system key is F10 or Alt+Something.
+            /// </summary>
+            WM_SYSKEYUP = 0x0105,
 
             /// <summary>
             /// The WM_MOUSEMOVE message is posted to a window when the cursor moves. If the mouse is not captured, the message is posted to the window that contains the cursor. Otherwise, the message is posted to the window that has captured the mouse.
@@ -166,28 +186,31 @@ namespace Microsoft.Terminal.Wpf
         public static extern void TerminalSendOutput(IntPtr terminal, string lpdata);
 
         [DllImport("PublicTerminalCore.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
-        public static extern uint TerminalTriggerResize(IntPtr terminal, double width, double height, out COORD dimensions);
+        public static extern uint TerminalTriggerResize(IntPtr terminal, int width, int height, out TilSize dimensions);
 
         [DllImport("PublicTerminalCore.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
-        public static extern uint TerminalResize(IntPtr terminal, COORD dimensions);
+        public static extern uint TerminalTriggerResizeWithDimension(IntPtr terminal, TilSize dimensions, out TilSize dimensionsInPixels);
+
+        [DllImport("PublicTerminalCore.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
+        public static extern uint TerminalCalculateResize(IntPtr terminal, int width, int height, out TilSize dimensions);
 
         [DllImport("PublicTerminalCore.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
         public static extern void TerminalDpiChanged(IntPtr terminal, int newDpi);
 
         [DllImport("PublicTerminalCore.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
-        public static extern void TerminalRegisterScrollCallback(IntPtr terminal, [MarshalAs(UnmanagedType.FunctionPtr)]ScrollCallback callback);
+        public static extern void TerminalRegisterScrollCallback(IntPtr terminal, [MarshalAs(UnmanagedType.FunctionPtr)] ScrollCallback callback);
 
         [DllImport("PublicTerminalCore.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
-        public static extern void TerminalRegisterWriteCallback(IntPtr terminal, [MarshalAs(UnmanagedType.FunctionPtr)]WriteCallback callback);
+        public static extern void TerminalRegisterWriteCallback(IntPtr terminal, [MarshalAs(UnmanagedType.FunctionPtr)] WriteCallback callback);
 
         [DllImport("PublicTerminalCore.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
         public static extern void TerminalUserScroll(IntPtr terminal, int viewTop);
 
         [DllImport("PublicTerminalCore.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
-        public static extern uint TerminalStartSelection(IntPtr terminal, NativeMethods.COORD cursorPosition, bool altPressed);
+        public static extern uint TerminalStartSelection(IntPtr terminal, TilPoint cursorPosition, bool altPressed);
 
         [DllImport("PublicTerminalCore.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
-        public static extern uint TerminalMoveSelection(IntPtr terminal, NativeMethods.COORD cursorPosition);
+        public static extern uint TerminalMoveSelection(IntPtr terminal, TilPoint cursorPosition);
 
         [DllImport("PublicTerminalCore.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
         public static extern void TerminalClearSelection(IntPtr terminal);
@@ -204,10 +227,10 @@ namespace Microsoft.Terminal.Wpf
         public static extern void DestroyTerminal(IntPtr terminal);
 
         [DllImport("PublicTerminalCore.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
-        public static extern void TerminalSendKeyEvent(IntPtr terminal, IntPtr wParam);
+        public static extern void TerminalSendKeyEvent(IntPtr terminal, ushort vkey, ushort scanCode, ushort flags, bool keyDown);
 
         [DllImport("PublicTerminalCore.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
-        public static extern void TerminalSendCharEvent(IntPtr terminal, char ch);
+        public static extern void TerminalSendCharEvent(IntPtr terminal, char ch, ushort scanCode, ushort flags);
 
         [DllImport("PublicTerminalCore.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
         public static extern void TerminalSetTheme(IntPtr terminal, [MarshalAs(UnmanagedType.Struct)] TerminalTheme theme, string fontFamily, short fontSize, int newDpi);
@@ -217,6 +240,12 @@ namespace Microsoft.Terminal.Wpf
 
         [DllImport("PublicTerminalCore.dll", CallingConvention = CallingConvention.StdCall)]
         public static extern void TerminalSetCursorVisible(IntPtr terminal, bool visible);
+
+        [DllImport("PublicTerminalCore.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
+        public static extern void TerminalSetFocus(IntPtr terminal);
+
+        [DllImport("PublicTerminalCore.dll", CharSet = CharSet.Unicode, CallingConvention = CallingConvention.StdCall)]
+        public static extern void TerminalKillFocus(IntPtr terminal);
 
         [DllImport("user32.dll", SetLastError = true)]
         public static extern IntPtr SetFocus(IntPtr hWnd);
@@ -243,17 +272,31 @@ namespace Microsoft.Terminal.Wpf
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        public struct COORD
+        public struct TilPoint
         {
             /// <summary>
             ///  The x-coordinate of the point.
             /// </summary>
-            public short X;
+            public int X;
 
             /// <summary>
-            /// The x-coordinate of the point.
+            /// The y-coordinate of the point.
             /// </summary>
-            public short Y;
+            public int Y;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct TilSize
+        {
+            /// <summary>
+            ///  The x size.
+            /// </summary>
+            public int X;
+
+            /// <summary>
+            /// The y size.
+            /// </summary>
+            public int Y;
         }
     }
 #pragma warning restore SA1600 // Elements should be documented

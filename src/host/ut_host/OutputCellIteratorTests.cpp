@@ -3,7 +3,7 @@
 
 #include "precomp.h"
 #include "WexTestClass.h"
-#include "..\..\inc\consoletaeftemplates.hpp"
+#include "../../inc/consoletaeftemplates.hpp"
 
 #include "../buffer/out/outputCellIterator.hpp"
 
@@ -23,18 +23,18 @@ class OutputCellIteratorTests
     {
         SetVerifyOutput settings(VerifyOutputSettings::LogOnlyFailures);
 
-        const wchar_t wch = L'\x30a2'; // katakana A
+        const auto wch = L'\x30a2'; // katakana A
         const size_t limit = 5;
 
         OutputCellIterator it(wch, limit);
 
         OutputCellView expectedLead({ &wch, 1 },
-                                    DbcsAttribute(DbcsAttribute::Attribute::Leading),
+                                    DbcsAttribute::Leading,
                                     InvalidTextAttribute,
                                     TextAttributeBehavior::Current);
 
         OutputCellView expectedTrail({ &wch, 1 },
-                                     DbcsAttribute(DbcsAttribute::Attribute::Trailing),
+                                     DbcsAttribute::Trailing,
                                      InvalidTextAttribute,
                                      TextAttributeBehavior::Current);
 
@@ -55,7 +55,7 @@ class OutputCellIteratorTests
     {
         SetVerifyOutput settings(VerifyOutputSettings::LogOnlyFailures);
 
-        const wchar_t wch = L'Q';
+        const auto wch = L'Q';
         const size_t limit = 5;
 
         OutputCellIterator it(wch, limit);
@@ -79,7 +79,7 @@ class OutputCellIteratorTests
     {
         SetVerifyOutput settings(VerifyOutputSettings::LogOnlyFailures);
 
-        const wchar_t wch = L'Q';
+        const auto wch = L'Q';
 
         OutputCellIterator it(wch);
 
@@ -102,8 +102,7 @@ class OutputCellIteratorTests
     {
         SetVerifyOutput settings(VerifyOutputSettings::LogOnlyFailures);
 
-        TextAttribute attr;
-        attr.SetFromLegacy(FOREGROUND_RED | BACKGROUND_BLUE);
+        const TextAttribute attr(FOREGROUND_RED | BACKGROUND_BLUE);
 
         const size_t limit = 5;
 
@@ -128,8 +127,7 @@ class OutputCellIteratorTests
     {
         SetVerifyOutput settings(VerifyOutputSettings::LogOnlyFailures);
 
-        TextAttribute attr;
-        attr.SetFromLegacy(FOREGROUND_RED | BACKGROUND_BLUE);
+        const TextAttribute attr(FOREGROUND_RED | BACKGROUND_BLUE);
 
         OutputCellIterator it(attr);
 
@@ -152,10 +150,9 @@ class OutputCellIteratorTests
     {
         SetVerifyOutput settings(VerifyOutputSettings::LogOnlyFailures);
 
-        const wchar_t wch = L'Q';
+        const auto wch = L'Q';
 
-        TextAttribute attr;
-        attr.SetFromLegacy(FOREGROUND_RED | BACKGROUND_BLUE);
+        const TextAttribute attr(FOREGROUND_RED | BACKGROUND_BLUE);
 
         const size_t limit = 5;
 
@@ -180,10 +177,9 @@ class OutputCellIteratorTests
     {
         SetVerifyOutput settings(VerifyOutputSettings::LogOnlyFailures);
 
-        const wchar_t wch = L'Q';
+        const auto wch = L'Q';
 
-        TextAttribute attr;
-        attr.SetFromLegacy(FOREGROUND_RED | BACKGROUND_BLUE);
+        const TextAttribute attr(FOREGROUND_RED | BACKGROUND_BLUE);
 
         OutputCellIterator it(wch, attr);
 
@@ -288,7 +284,7 @@ class OutputCellIteratorTests
         for (const auto& wch : testText)
         {
             auto expected = OutputCellView({ &wch, 1 },
-                                           DbcsAttribute(DbcsAttribute::Attribute::Leading),
+                                           DbcsAttribute::Leading,
                                            InvalidTextAttribute,
                                            TextAttributeBehavior::Current);
 
@@ -297,7 +293,7 @@ class OutputCellIteratorTests
             it++;
 
             expected = OutputCellView({ &wch, 1 },
-                                      DbcsAttribute(DbcsAttribute::Attribute::Trailing),
+                                      DbcsAttribute::Trailing,
                                       InvalidTextAttribute,
                                       TextAttributeBehavior::Current);
 
@@ -314,8 +310,7 @@ class OutputCellIteratorTests
         SetVerifyOutput settings(VerifyOutputSettings::LogOnlyFailures);
 
         const std::wstring testText(L"The quick brown fox jumps over the lazy dog.");
-        TextAttribute color;
-        color.SetFromLegacy(FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        const TextAttribute color(FOREGROUND_GREEN | FOREGROUND_INTENSITY);
 
         OutputCellIterator it(testText, color);
 
@@ -339,15 +334,14 @@ class OutputCellIteratorTests
         SetVerifyOutput settings(VerifyOutputSettings::LogOnlyFailures);
 
         const std::wstring testText(L"\x30a2\x30a3\x30a4\x30a5\x30a6");
-        TextAttribute color;
-        color.SetFromLegacy(FOREGROUND_GREEN | FOREGROUND_INTENSITY);
+        const TextAttribute color(FOREGROUND_GREEN | FOREGROUND_INTENSITY);
 
         OutputCellIterator it(testText, color);
 
         for (const auto& wch : testText)
         {
             auto expected = OutputCellView({ &wch, 1 },
-                                           DbcsAttribute(DbcsAttribute::Attribute::Leading),
+                                           DbcsAttribute::Leading,
                                            color,
                                            TextAttributeBehavior::Stored);
 
@@ -356,7 +350,7 @@ class OutputCellIteratorTests
             it++;
 
             expected = OutputCellView({ &wch, 1 },
-                                      DbcsAttribute(DbcsAttribute::Attribute::Trailing),
+                                      DbcsAttribute::Trailing,
                                       color,
                                       TextAttributeBehavior::Stored);
 
@@ -373,15 +367,15 @@ class OutputCellIteratorTests
         SetVerifyOutput settings(VerifyOutputSettings::LogOnlyFailures);
 
         const std::vector<WORD> colors{ FOREGROUND_GREEN, FOREGROUND_RED | BACKGROUND_BLUE, FOREGROUND_BLUE | FOREGROUND_INTENSITY, BACKGROUND_GREEN };
-        const std::basic_string_view<WORD> view{ colors.data(), colors.size() };
+        const gsl::span<const WORD> view{ colors.data(), colors.size() };
 
-        OutputCellIterator it(view, false);
+        OutputCellIterator it(view);
 
         for (const auto& color : colors)
         {
             auto expected = OutputCellView({},
                                            {},
-                                           { color },
+                                           TextAttribute{ color },
                                            TextAttributeBehavior::StoredOnly);
 
             VERIFY_IS_TRUE(it);
@@ -407,7 +401,7 @@ class OutputCellIteratorTests
             charInfos.push_back(ci);
         }
 
-        const std::basic_string_view<CHAR_INFO> view{ charInfos.data(), charInfos.size() };
+        const gsl::span<const CHAR_INFO> view{ charInfos.data(), charInfos.size() };
 
         OutputCellIterator it(view);
 
@@ -415,7 +409,7 @@ class OutputCellIteratorTests
         {
             auto expected = OutputCellView({ &ci.Char.UnicodeChar, 1 },
                                            {},
-                                           { ci.Attributes },
+                                           TextAttribute{ ci.Attributes },
                                            TextAttributeBehavior::Stored);
 
             VERIFY_IS_TRUE(it);
@@ -435,11 +429,11 @@ class OutputCellIteratorTests
         for (auto i = 0; i < 5; i++)
         {
             const std::wstring pair(L"\xd834\xdd1e");
-            OutputCell cell(pair, {}, gsl::narrow<WORD>(i));
+            OutputCell cell(pair, {}, TextAttribute{ gsl::narrow<WORD>(i) });
             cells.push_back(cell);
         }
 
-        const std::basic_string_view<OutputCell> view{ cells.data(), cells.size() };
+        const gsl::span<const OutputCell> view{ cells.data(), cells.size() };
 
         OutputCellIterator it(view);
 
@@ -502,7 +496,7 @@ class OutputCellIteratorTests
             const auto value = *it;
             it++;
 
-            if (value.DbcsAttr().IsLeading() || value.DbcsAttr().IsTrailing())
+            if (value.DbcsAttr() == DbcsAttribute::Leading || value.DbcsAttr() == DbcsAttribute::Trailing)
             {
                 VERIFY_IS_TRUE(it);
                 it++;

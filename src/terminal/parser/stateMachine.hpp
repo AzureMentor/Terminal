@@ -21,6 +21,17 @@ Abstract:
 
 namespace Microsoft::Console::VirtualTerminal
 {
+    // The DEC STD 070 reference recommends supporting up to at least 16384
+    // for parameter values. 65535 is what XTerm and VTE support.
+    // GH#12977: We must use 65535 to properly parse win32-input-mode
+    // sequences, which transmit the UTF-16 character value as a parameter.
+    constexpr VTInt MAX_PARAMETER_VALUE = 65535;
+
+    // The DEC STD 070 reference requires that a minimum of 16 parameter values
+    // are supported, but most modern terminal emulators will allow around twice
+    // that number.
+    constexpr size_t MAX_PARAMETER_COUNT = 32;
+
     class StateMachine final
     {
 #ifdef UNIT_TESTING
@@ -29,73 +40,82 @@ namespace Microsoft::Console::VirtualTerminal
 #endif
 
     public:
-        StateMachine(IStateMachineEngine* const pEngine);
+        template<typename T>
+        StateMachine(std::unique_ptr<T> engine) :
+            StateMachine(std::move(engine), std::is_same_v<T, class InputStateMachineEngine>)
+        {
+        }
+        StateMachine(std::unique_ptr<IStateMachineEngine> engine, const bool isEngineForInput);
+
+        enum class Mode : size_t
+        {
+            AcceptC1,
+            AlwaysAcceptC1,
+            Ansi,
+        };
+
+        void SetParserMode(const Mode mode, const bool enabled) noexcept;
+        bool GetParserMode(const Mode mode) const noexcept;
 
         void ProcessCharacter(const wchar_t wch);
-        void ProcessString(const wchar_t* const rgwch, const size_t cch);
-        void ProcessString(const std::wstring& wstr);
+        void ProcessString(const std::wstring_view string);
+        bool IsProcessingLastCharacter() const noexcept;
 
-        void ResetState();
+        void OnCsiComplete(const std::function<void()> callback);
+
+        void ResetState() noexcept;
 
         bool FlushToTerminal();
 
         const IStateMachineEngine& Engine() const noexcept;
         IStateMachineEngine& Engine() noexcept;
 
-        static const short s_cIntermediateMax = 1;
-        static const short s_cParamsMax = 16;
-        static const short s_cOscStringMaxLength = 256;
+        class ShutdownException : public wil::ResultException
+        {
+        public:
+            ShutdownException() noexcept :
+                ResultException(E_ABORT) {}
+        };
 
     private:
-        static bool s_IsActionableFromGround(const wchar_t wch);
-        static bool s_IsC0Code(const wchar_t wch);
-        static bool s_IsC1Csi(const wchar_t wch);
-        static bool s_IsIntermediate(const wchar_t wch);
-        static bool s_IsDelete(const wchar_t wch);
-        static bool s_IsEscape(const wchar_t wch);
-        static bool s_IsCsiIndicator(const wchar_t wch);
-        static bool s_IsCsiDelimiter(const wchar_t wch);
-        static bool s_IsCsiParamValue(const wchar_t wch);
-        static bool s_IsCsiPrivateMarker(const wchar_t wch);
-        static bool s_IsCsiInvalid(const wchar_t wch);
-        static bool s_IsOscIndicator(const wchar_t wch);
-        static bool s_IsOscDelimiter(const wchar_t wch);
-        static bool s_IsOscParamValue(const wchar_t wch);
-        static bool s_IsOscInvalid(const wchar_t wch);
-        static bool s_IsOscTerminator(const wchar_t wch);
-        static bool s_IsOscTerminationInitiator(const wchar_t wch);
-        static bool s_IsDesignateCharsetIndicator(const wchar_t wch);
-        static bool s_IsCharsetCode(const wchar_t wch);
-        static bool s_IsNumber(const wchar_t wch);
-        static bool s_IsSs3Indicator(const wchar_t wch);
-
         void _ActionExecute(const wchar_t wch);
         void _ActionExecuteFromEscape(const wchar_t wch);
         void _ActionPrint(const wchar_t wch);
+        void _ActionPrintString(const std::wstring_view string);
         void _ActionEscDispatch(const wchar_t wch);
-        void _ActionCollect(const wchar_t wch);
+        void _ActionVt52EscDispatch(const wchar_t wch);
+        void _ActionCollect(const wchar_t wch) noexcept;
         void _ActionParam(const wchar_t wch);
         void _ActionCsiDispatch(const wchar_t wch);
-        void _ActionOscParam(const wchar_t wch);
+        void _ActionOscParam(const wchar_t wch) noexcept;
         void _ActionOscPut(const wchar_t wch);
         void _ActionOscDispatch(const wchar_t wch);
         void _ActionSs3Dispatch(const wchar_t wch);
+        void _ActionDcsDispatch(const wchar_t wch);
 
         void _ActionClear();
-        void _ActionIgnore();
+        void _ActionIgnore() noexcept;
+        void _ActionInterrupt();
 
-        void _EnterGround();
+        void _EnterGround() noexcept;
         void _EnterEscape();
-        void _EnterEscapeIntermediate();
+        void _EnterEscapeIntermediate() noexcept;
         void _EnterCsiEntry();
-        void _EnterCsiParam();
-        void _EnterCsiIgnore();
-        void _EnterCsiIntermediate();
-        void _EnterOscParam();
-        void _EnterOscString();
-        void _EnterOscTermination();
+        void _EnterCsiParam() noexcept;
+        void _EnterCsiIgnore() noexcept;
+        void _EnterCsiIntermediate() noexcept;
+        void _EnterOscParam() noexcept;
+        void _EnterOscString() noexcept;
+        void _EnterOscTermination() noexcept;
         void _EnterSs3Entry();
-        void _EnterSs3Param();
+        void _EnterSs3Param() noexcept;
+        void _EnterVt52Param() noexcept;
+        void _EnterDcsEntry();
+        void _EnterDcsParam() noexcept;
+        void _EnterDcsIgnore() noexcept;
+        void _EnterDcsIntermediate() noexcept;
+        void _EnterDcsPassThrough() noexcept;
+        void _EnterSosPmApcString() noexcept;
 
         void _EventGround(const wchar_t wch);
         void _EventEscape(const wchar_t wch);
@@ -104,11 +124,27 @@ namespace Microsoft::Console::VirtualTerminal
         void _EventCsiIntermediate(const wchar_t wch);
         void _EventCsiIgnore(const wchar_t wch);
         void _EventCsiParam(const wchar_t wch);
-        void _EventOscParam(const wchar_t wch);
+        void _EventOscParam(const wchar_t wch) noexcept;
         void _EventOscString(const wchar_t wch);
         void _EventOscTermination(const wchar_t wch);
         void _EventSs3Entry(const wchar_t wch);
         void _EventSs3Param(const wchar_t wch);
+        void _EventVt52Param(const wchar_t wch);
+        void _EventDcsEntry(const wchar_t wch);
+        void _EventDcsIgnore() noexcept;
+        void _EventDcsIntermediate(const wchar_t wch);
+        void _EventDcsParam(const wchar_t wch);
+        void _EventDcsPassThrough(const wchar_t wch);
+        void _EventSosPmApcString(const wchar_t wch) noexcept;
+
+        void _AccumulateTo(const wchar_t wch, VTInt& value) noexcept;
+
+        template<typename TLambda>
+        bool _SafeExecute(TLambda&& lambda);
+        template<typename TLambda>
+        bool _SafeExecuteWithLog(const wchar_t wch, TLambda&& lambda);
+
+        void _ExecuteCsiCompleteCallback();
 
         enum class VTStates
         {
@@ -123,36 +159,54 @@ namespace Microsoft::Console::VirtualTerminal
             OscString,
             OscTermination,
             Ss3Entry,
-            Ss3Param
+            Ss3Param,
+            Vt52Param,
+            DcsEntry,
+            DcsIgnore,
+            DcsIntermediate,
+            DcsParam,
+            DcsPassThrough,
+            SosPmApcString
         };
 
         Microsoft::Console::VirtualTerminal::ParserTracing _trace;
 
-        std::unique_ptr<IStateMachineEngine> _pEngine;
+        std::unique_ptr<IStateMachineEngine> _engine;
+        const bool _isEngineForInput;
 
         VTStates _state;
 
-        wchar_t _wchIntermediate;
-        unsigned short _cIntermediate;
+        til::enumset<Mode> _parserMode{ Mode::Ansi };
 
-        unsigned short _rgusParams[s_cParamsMax];
-        unsigned short _cParams;
-        unsigned short* _pusActiveParam;
-        unsigned short _iParamAccumulatePos;
+        std::wstring_view _currentString;
+        size_t _runOffset;
+        size_t _runSize;
 
-        unsigned short _sOscParam;
-        unsigned short _sOscNextChar;
-        wchar_t _pwchOscStringBuffer[s_cOscStringMaxLength];
+        // Construct current run.
+        //
+        // Note: We intentionally use this method to create the run lazily for better performance.
+        //       You may find the usage of offset & size unsafe, but under heavy load it shows noticeable performance benefit.
+        std::wstring_view _CurrentRun() const
+        {
+            return _currentString.substr(_runOffset, _runSize);
+        }
 
-        // These members track out state in the parsing of a single string.
-        // FlushToTerminal uses these, so that an engine can force a string
-        // we're parsing to go straight through to the engine's ActionPassThroughString
-        const wchar_t* _pwchCurr;
-        const wchar_t* _pwchSequenceStart;
-        size_t _currRunLength;
+        VTIDBuilder _identifier;
+        std::vector<VTParameter> _parameters;
+        bool _parameterLimitReached;
+
+        std::wstring _oscString;
+        VTInt _oscParameter;
+
+        IStateMachineEngine::StringHandler _dcsStringHandler;
+
+        std::optional<std::wstring> _cachedSequence;
 
         // This is tracked per state machine instance so that separate calls to Process*
         //   can start and finish a sequence.
-        bool _fProcessingIndividually;
+        bool _processingIndividually;
+        bool _processingLastCharacter;
+
+        std::function<void()> _onCsiCompleteCallback;
     };
 }

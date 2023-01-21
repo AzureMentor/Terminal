@@ -63,12 +63,6 @@
     <ClCompile Include="..\WindowProc.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\InputServices.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="..\windowtheme.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="..\windowUiaProvider.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -126,12 +120,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\WindowMetrics.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\InputServices.hpp">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\windowtheme.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\windowUiaProvider.hpp">

@@ -20,27 +20,14 @@ Revision History:
 #include "ObjectHandle.h"
 #include "WaitQueue.h"
 #include "ProcessPolicy.h"
+#include "ConsoleShimPolicy.h"
 
 #include <memory>
-#include <wil\resource.h>
+#include <wil/resource.h>
 
 class ConsoleProcessHandle
 {
 public:
-    std::unique_ptr<ConsoleWaitQueue> const pWaitBlockQueue;
-    std::unique_ptr<ConsoleHandleData> pInputHandle;
-    std::unique_ptr<ConsoleHandleData> pOutputHandle;
-
-    bool fRootProcess;
-
-    DWORD const dwProcessId;
-    DWORD const dwThreadId;
-
-    const ConsoleProcessPolicy GetPolicy() const;
-
-    CD_CONNECTION_INFORMATION GetConnectionInformation() const;
-
-private:
     ConsoleProcessHandle(const DWORD dwProcessId,
                          const DWORD dwThreadId,
                          const ULONG ulProcessGroupId);
@@ -50,11 +37,33 @@ private:
     ConsoleProcessHandle& operator=(const ConsoleProcessHandle&) & = delete;
     ConsoleProcessHandle& operator=(ConsoleProcessHandle&&) & = delete;
 
+    const std::unique_ptr<ConsoleWaitQueue> pWaitBlockQueue;
+    std::unique_ptr<ConsoleHandleData> pInputHandle;
+    std::unique_ptr<ConsoleHandleData> pOutputHandle;
+
+    bool fRootProcess;
+
+    DWORD const dwProcessId;
+    DWORD const dwThreadId;
+
+    const ConsoleProcessPolicy GetPolicy() const;
+    const ConsoleShimPolicy GetShimPolicy() const;
+
+    const HANDLE GetRawHandle() const;
+
+    CD_CONNECTION_INFORMATION GetConnectionInformation(IDeviceComm* deviceComm) const;
+
+    const ULONG64 GetProcessCreationTime() const;
+
+private:
     ULONG _ulTerminateCount;
     ULONG const _ulProcessGroupId;
     wil::unique_handle const _hProcess;
 
+    mutable ULONG64 _processCreationTime;
+
     const ConsoleProcessPolicy _policy;
+    const ConsoleShimPolicy _shimPolicy;
 
     friend class ConsoleProcessList; // ensure List manages lifetimes and not other classes.
 };

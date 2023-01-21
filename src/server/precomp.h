@@ -21,6 +21,8 @@ Abstract:
 #define WIN32_LEAN_AND_MEAN // Exclude rarely-used stuff from Windows headers
 #endif
 
+#define NOMINMAX
+
 // Windows Header Files:
 #include <windows.h>
 
@@ -66,7 +68,7 @@ __inline NTSTATUS_FROM_WIN32(long x)
 #include "LibraryIncludes.h"
 
 // private dependencies
-#include "..\host\conddkrefs.h"
+#include "../host/conddkrefs.h"
 
 #include <conmsgl1.h>
 #include <conmsgl2.h>

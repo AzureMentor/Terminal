@@ -1,30 +1,30 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-#include "..\..\inc\conpty.h"
+#include "../../inc/conpty.h"
 #include "VtConsole.hpp"
 
-#include <stdlib.h> /* srand, rand */
-#include <time.h> /* time */
+#include <cstdlib> /* srand, rand */
+#include <ctime> /* time */
 
 #include <deque>
 #include <vector>
 #include <string>
 #include <sstream>
 #include <iomanip>
-#include <assert.h>
+#include <cassert>
 #include <wincon.h>
 
-VtConsole::VtConsole(PipeReadCallback const pfnReadCallback,
-                     bool const fHeadless,
-                     bool const fUseConpty,
-                     COORD const initialSize) :
+VtConsole::VtConsole(const PipeReadCallback pfnReadCallback,
+                     const bool fHeadless,
+                     const bool fUseConpty,
+                     const COORD initialSize) :
     _pfnReadCallback(pfnReadCallback),
     _fHeadless(fHeadless),
     _fUseConPty(fUseConpty),
     _lastDimensions(initialSize)
 {
-    THROW_IF_NULL_ALLOC(pfnReadCallback);
+    THROW_HR_IF_NULL(E_INVALIDARG, pfnReadCallback);
 }
 
 void VtConsole::spawn()
@@ -51,8 +51,8 @@ HRESULT AttachPseudoConsole(HPCON hPC, LPPROC_THREAD_ATTRIBUTE_LIST lpAttributeL
                                               PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
                                               hPC,
                                               sizeof(HPCON),
-                                              NULL,
-                                              NULL);
+                                              nullptr,
+                                              nullptr);
     return fSuccess ? S_OK : HRESULT_FROM_WIN32(GetLastError());
 }
 
@@ -70,7 +70,7 @@ HRESULT CreatePseudoConsoleAndHandles(COORD size,
                                       _Out_ HANDLE* phOutput,
                                       _Out_ HPCON* phPC)
 {
-    if (phPC == NULL || phInput == NULL || phOutput == NULL)
+    if (phPC == nullptr || phInput == nullptr || phOutput == nullptr)
     {
         return E_INVALIDARG;
     }
@@ -80,14 +80,14 @@ HRESULT CreatePseudoConsoleAndHandles(COORD size,
     HANDLE outPipePseudoConsoleSide;
     HANDLE inPipePseudoConsoleSide;
 
-    HRESULT hr = S_OK;
-    if (!CreatePipe(&inPipePseudoConsoleSide, &inPipeOurSide, NULL, 0))
+    auto hr = S_OK;
+    if (!CreatePipe(&inPipePseudoConsoleSide, &inPipeOurSide, nullptr, 0))
     {
         hr = HRESULT_FROM_WIN32(GetLastError());
     }
     if (SUCCEEDED(hr))
     {
-        if (!CreatePipe(&outPipeOurSide, &outPipePseudoConsoleSide, NULL, 0))
+        if (!CreatePipe(&outPipeOurSide, &outPipePseudoConsoleSide, nullptr, 0))
         {
             hr = HRESULT_FROM_WIN32(GetLastError());
         }
@@ -165,7 +165,7 @@ void VtConsole::_createPseudoConsole(const std::wstring& command)
     siEx = { 0 };
     siEx.StartupInfo.cb = sizeof(STARTUPINFOEX);
     size_t size;
-    InitializeProcThreadAttributeList(NULL, 1, 0, (PSIZE_T)&size);
+    InitializeProcThreadAttributeList(nullptr, 1, 0, (PSIZE_T)&size);
     BYTE* attrList = new BYTE[size];
     siEx.lpAttributeList = reinterpret_cast<PPROC_THREAD_ATTRIBUTE_LIST>(attrList);
     fSuccess = InitializeProcThreadAttributeList(siEx.lpAttributeList, 1, 0, (PSIZE_T)&size);

@@ -4,6 +4,7 @@
 #include "pch.h"
 #include "Terminal.hpp"
 #include <DefaultSettings.h>
+
 using namespace Microsoft::Terminal::Core;
 using namespace Microsoft::Console::Types;
 using namespace Microsoft::Console::Render;
@@ -13,60 +14,44 @@ Viewport Terminal::GetViewport() noexcept
     return _GetVisibleViewport();
 }
 
-const TextBuffer& Terminal::GetTextBuffer() noexcept
+til::point Terminal::GetTextBufferEndPosition() const noexcept
 {
-    return *_buffer;
+    // We use the end line of mutableViewport as the end
+    // of the text buffer, it always moves with the written
+    // text
+    return { _GetMutableViewport().Width() - 1, ViewEndIndex() };
 }
 
-const FontInfo& Terminal::GetFontInfo() noexcept
+const TextBuffer& Terminal::GetTextBuffer() const noexcept
 {
-    // TODO: This font value is only used to check if the font is a raster font.
-    // Otherwise, the font is changed with the renderer via TriggerFontChange.
-    // The renderer never uses any of the other members from the value returned
-    //      by this method.
-    // We could very likely replace this with just an IsRasterFont method
-    //      (which would return false)
-    static const FontInfo _fakeFontInfo(DEFAULT_FONT_FACE.c_str(), TMPF_TRUETYPE, 10, { 0, DEFAULT_FONT_SIZE }, CP_UTF8, false);
-    return _fakeFontInfo;
+    return _activeBuffer();
 }
 
-const TextAttribute Terminal::GetDefaultBrushColors() noexcept
+const FontInfo& Terminal::GetFontInfo() const noexcept
 {
-    return TextAttribute{};
+    return _fontInfo;
 }
 
-const COLORREF Terminal::GetForegroundColor(const TextAttribute& attr) const noexcept
+void Terminal::SetFontInfo(const FontInfo& fontInfo)
 {
-    return 0xff000000 | attr.CalculateRgbForeground({ &_colorTable[0], _colorTable.size() }, _defaultFg, _defaultBg);
+    _fontInfo = fontInfo;
 }
 
-const COLORREF Terminal::GetBackgroundColor(const TextAttribute& attr) const noexcept
+til::point Terminal::GetCursorPosition() const noexcept
 {
-    const auto bgColor = attr.CalculateRgbBackground({ &_colorTable[0], _colorTable.size() }, _defaultFg, _defaultBg);
-    // We only care about alpha for the default BG (which enables acrylic)
-    // If the bg isn't the default bg color, then make it fully opaque.
-    if (!attr.BackgroundIsDefault())
-    {
-        return 0xff000000 | bgColor;
-    }
-    return bgColor;
-}
-
-COORD Terminal::GetCursorPosition() const noexcept
-{
-    const auto& cursor = _buffer->GetCursor();
+    const auto& cursor = _activeBuffer().GetCursor();
     return cursor.GetPosition();
 }
 
 bool Terminal::IsCursorVisible() const noexcept
 {
-    const auto& cursor = _buffer->GetCursor();
+    const auto& cursor = _activeBuffer().GetCursor();
     return cursor.IsVisible() && !cursor.IsPopupShown();
 }
 
 bool Terminal::IsCursorOn() const noexcept
 {
-    const auto& cursor = _buffer->GetCursor();
+    const auto& cursor = _activeBuffer().GetCursor();
     return cursor.IsOn();
 }
 
@@ -77,22 +62,19 @@ ULONG Terminal::GetCursorPixelWidth() const noexcept
 
 ULONG Terminal::GetCursorHeight() const noexcept
 {
-    return _buffer->GetCursor().GetSize();
+    return _activeBuffer().GetCursor().GetSize();
 }
 
 CursorType Terminal::GetCursorStyle() const noexcept
 {
-    return _buffer->GetCursor().GetType();
-}
-
-COLORREF Terminal::GetCursorColor() const noexcept
-{
-    return _buffer->GetCursor().GetColor();
+    return _activeBuffer().GetCursor().GetType();
 }
 
 bool Terminal::IsCursorDoubleWidth() const noexcept
 {
-    return false;
+    const auto& buffer = _activeBuffer();
+    const auto position = buffer.GetCursor().GetPosition();
+    return buffer.GetRowByOffset(position.y).DbcsAttrAt(position.x) != DbcsAttribute::Single;
 }
 
 const std::vector<RenderOverlay> Terminal::GetOverlays() const noexcept
@@ -105,7 +87,49 @@ const bool Terminal::IsGridLineDrawingAllowed() noexcept
     return true;
 }
 
+const std::wstring Microsoft::Terminal::Core::Terminal::GetHyperlinkUri(uint16_t id) const
+{
+    return _activeBuffer().GetHyperlinkUriFromId(id);
+}
+
+const std::wstring Microsoft::Terminal::Core::Terminal::GetHyperlinkCustomId(uint16_t id) const
+{
+    return _activeBuffer().GetCustomIdFromId(id);
+}
+
+// Method Description:
+// - Gets the regex pattern ids of a location
+// Arguments:
+// - The location
+// Return value:
+// - The pattern IDs of the location
+const std::vector<size_t> Terminal::GetPatternId(const til::point location) const
+{
+    // Look through our interval tree for this location
+    const auto intervals = _patternIntervalTree.findOverlapping({ location.x + 1, location.y }, location);
+    if (intervals.size() == 0)
+    {
+        return {};
+    }
+    else
+    {
+        std::vector<size_t> result{};
+        for (const auto& interval : intervals)
+        {
+            result.emplace_back(interval.value);
+        }
+        return result;
+    }
+    return {};
+}
+
+std::pair<COLORREF, COLORREF> Terminal::GetAttributeColors(const TextAttribute& attr) const noexcept
+{
+    return _renderSettings.GetAttributeColors(attr);
+}
+
 std::vector<Microsoft::Console::Types::Viewport> Terminal::GetSelectionRects() noexcept
+try
 {
     std::vector<Viewport> result;
 
@@ -116,16 +140,63 @@ std::vector<Microsoft::Console::Types::Viewport> Terminal::GetSelectionRects() n
 
     return result;
 }
-
-void Terminal::SelectNewRegion(const COORD coordStart, const COORD coordEnd)
+catch (...)
 {
-    SetSelectionAnchor(coordStart);
-    SetEndSelectionPosition(coordEnd);
+    LOG_CAUGHT_EXCEPTION();
+    return {};
 }
 
-const std::wstring Terminal::GetConsoleTitle() const noexcept
+void Terminal::SelectNewRegion(const til::point coordStart, const til::point coordEnd)
 {
-    return _title;
+#pragma warning(push)
+#pragma warning(disable : 26496) // cpp core checks wants these const, but they're decremented below.
+    auto realCoordStart = coordStart;
+    auto realCoordEnd = coordEnd;
+#pragma warning(pop)
+
+    auto notifyScrollChange = false;
+    if (coordStart.y < _VisibleStartIndex())
+    {
+        // recalculate the scrollOffset
+        _scrollOffset = ViewStartIndex() - coordStart.y;
+        notifyScrollChange = true;
+    }
+    else if (coordEnd.y > _VisibleEndIndex())
+    {
+        // recalculate the scrollOffset, note that if the found text is
+        // beneath the current visible viewport, it may be within the
+        // current mutableViewport and the scrollOffset will be smaller
+        // than 0
+        _scrollOffset = std::max(0, ViewStartIndex() - coordStart.y);
+        notifyScrollChange = true;
+    }
+
+    if (notifyScrollChange)
+    {
+        _activeBuffer().TriggerScroll();
+        _NotifyScrollEvent();
+    }
+
+    realCoordStart.y -= _VisibleStartIndex();
+    realCoordEnd.y -= _VisibleStartIndex();
+
+    SetSelectionAnchor(realCoordStart);
+    SetSelectionEnd(realCoordEnd, SelectionExpansion::Char);
+}
+
+const std::wstring_view Terminal::GetConsoleTitle() const noexcept
+try
+{
+    if (_title.has_value())
+    {
+        return _title.value();
+    }
+    return _startingTitle;
+}
+catch (...)
+{
+    LOG_CAUGHT_EXCEPTION();
+    return {};
 }
 
 // Method Description:
@@ -136,12 +207,21 @@ const std::wstring Terminal::GetConsoleTitle() const noexcept
 //      they're done with any querying they need to do.
 void Terminal::LockConsole() noexcept
 {
-    _readWriteLock.lock_shared();
+    _readWriteLock.lock();
 }
 
 // Method Description:
 // - Unlocks the terminal after a call to Terminal::LockConsole.
 void Terminal::UnlockConsole() noexcept
 {
-    _readWriteLock.unlock_shared();
+    _readWriteLock.unlock();
+}
+
+const bool Terminal::IsUiaDataInitialized() const noexcept
+{
+    // GH#11135: Windows Terminal needs to create and return an automation peer
+    // when a screen reader requests it. However, the terminal might not be fully
+    // initialized yet. So we use this to check if any crucial components of
+    // UiaData are not yet initialized.
+    return !!_mainBuffer;
 }

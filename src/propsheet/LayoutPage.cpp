@@ -8,7 +8,7 @@ BOOL g_fInScreenSizeSETACTIVE = FALSE;
 
 BOOL GetStateInfo(HWND /*hDlg*/, UINT Item, __out LPINT lpValue)
 {
-    BOOL bRet = TRUE;
+    auto bRet = TRUE;
     int Value;
 
     switch (Item)
@@ -220,7 +220,7 @@ INT_PTR WINAPI ScreenSizeDlgProc(HWND hDlg, UINT wMsg, WPARAM wParam, LPARAM lPa
             return TRUE;
 
         case PSN_SETACTIVE:
-            // When page becomes active, ensure that window and screen size box availablility
+            // When page becomes active, ensure that window and screen size box availability
             // is updated based on the Word Wrap status.
             g_fInScreenSizeSETACTIVE = TRUE;
             if (g_fForceV2 && gpStateInfo->fWrapText)
@@ -254,7 +254,7 @@ INT_PTR WINAPI ScreenSizeDlgProc(HWND hDlg, UINT wMsg, WPARAM wParam, LPARAM lPa
 }
 
 // enables or disables layout page dialog controls depending on whether V2 is enabled or not
-void ToggleV2LayoutControls(__in const HWND hDlg)
+void ToggleV2LayoutControls(const __in HWND hDlg)
 {
     EnableWindow(GetDlgItem(hDlg, IDD_LINE_WRAP), g_fForceV2);
     CheckDlgButton(hDlg, IDD_LINE_WRAP, g_fForceV2 ? gpStateInfo->fWrapText : FALSE);

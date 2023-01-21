@@ -36,15 +36,11 @@ namespace Microsoft
 class DummyDispatch final : public TermDispatch
 {
 public:
-    virtual void Execute(const wchar_t /*wchControl*/) override
-    {
-    }
-
     virtual void Print(const wchar_t /*wchPrintable*/) override
     {
     }
 
-    virtual void PrintString(const wchar_t* const /*rgwch*/, const size_t /*cch*/) override
+    virtual void PrintString(const std::wstring_view /*string*/) override
     {
     }
 };
@@ -56,16 +52,18 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
     TEST_METHOD(TestEscapePath)
     {
         BEGIN_TEST_METHOD_PROPERTIES()
-            TEST_METHOD_PROPERTY(L"Data:uiTest", L"{0,1,2,3,4,5,6,7,8,9,10,11}") // one value for each type of state test below.
+            TEST_METHOD_PROPERTY(L"Data:uiTest", L"{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17}") // one value for each type of state test below.
         END_TEST_METHOD_PROPERTIES()
 
-        unsigned int uiTest;
+        size_t uiTest;
         VERIFY_SUCCEEDED_RETURN(TestData::TryGetValue(L"uiTest", uiTest));
-
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         // The OscString state shouldn't escape out after an ESC.
-        bool shouldEscapeOut = true;
+        // Same for DcsPassThrough and SosPmApcString state.
+        auto shouldEscapeOut = true;
 
         switch (uiTest)
         {
@@ -142,6 +140,45 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
             mach._state = StateMachine::VTStates::Ss3Param;
             break;
         }
+        case 12:
+        {
+            Log::Comment(L"Escape from DcsEntry");
+            mach._state = StateMachine::VTStates::DcsEntry;
+            break;
+        }
+        case 13:
+        {
+            Log::Comment(L"Escape from DcsIgnore");
+            mach._state = StateMachine::VTStates::DcsIgnore;
+            break;
+        }
+        case 14:
+        {
+            Log::Comment(L"Escape from DcsIntermediate");
+            mach._state = StateMachine::VTStates::DcsIntermediate;
+            break;
+        }
+        case 15:
+        {
+            Log::Comment(L"Escape from DcsParam");
+            mach._state = StateMachine::VTStates::DcsParam;
+            break;
+        }
+        case 16:
+        {
+            Log::Comment(L"Escape from DcsPassThrough");
+            shouldEscapeOut = false;
+            mach._state = StateMachine::VTStates::DcsPassThrough;
+            mach._dcsStringHandler = [](const auto) { return true; };
+            break;
+        }
+        case 17:
+        {
+            Log::Comment(L"Escape from SosPmApcString");
+            shouldEscapeOut = false;
+            mach._state = StateMachine::VTStates::SosPmApcString;
+            break;
+        }
         }
 
         mach.ProcessCharacter(AsciiChars::ESC);
@@ -153,7 +190,9 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
 
     TEST_METHOD(TestEscapeImmediatePath)
     {
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(AsciiChars::ESC);
@@ -172,7 +211,9 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
 
     TEST_METHOD(TestEscapeThenC0Path)
     {
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(AsciiChars::ESC);
@@ -194,7 +235,9 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
 
     TEST_METHOD(TestGroundPrint)
     {
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(L'a');
@@ -203,7 +246,9 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
 
     TEST_METHOD(TestCsiEntry)
     {
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(AsciiChars::ESC);
@@ -216,7 +261,12 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
 
     TEST_METHOD(TestC1CsiEntry)
     {
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        // Enable the acceptance of C1 control codes in the state machine.
+        mach.SetParserMode(StateMachine::Mode::AcceptC1, true);
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(L'\x9b');
@@ -227,7 +277,9 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
 
     TEST_METHOD(TestCsiImmediate)
     {
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(AsciiChars::ESC);
@@ -246,7 +298,9 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
 
     TEST_METHOD(TestCsiParam)
     {
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(AsciiChars::ESC);
@@ -269,35 +323,79 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::CsiParam);
         mach.ProcessCharacter(L'J');
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+
+        VERIFY_ARE_EQUAL(mach._parameters.size(), 4u);
+        VERIFY_IS_FALSE(mach._parameters.at(0).has_value());
+        VERIFY_ARE_EQUAL(mach._parameters.at(1), 324);
+        VERIFY_IS_FALSE(mach._parameters.at(2).has_value());
+        VERIFY_ARE_EQUAL(mach._parameters.at(3), 8);
+    }
+
+    TEST_METHOD(TestCsiMaxParamCount)
+    {
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        Log::Comment(L"Output a sequence with 100 parameters");
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'[');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::CsiEntry);
+        for (size_t i = 0; i < 100; i++)
+        {
+            if (i > 0)
+            {
+                mach.ProcessCharacter(L';');
+                VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::CsiParam);
+            }
+            mach.ProcessCharacter(L'0' + i % 10);
+            VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::CsiParam);
+        }
+        mach.ProcessCharacter(L'J');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+
+        Log::Comment(L"Only MAX_PARAMETER_COUNT (32) parameters should be stored");
+        VERIFY_ARE_EQUAL(mach._parameters.size(), MAX_PARAMETER_COUNT);
+        for (size_t i = 0; i < MAX_PARAMETER_COUNT; i++)
+        {
+            VERIFY_IS_TRUE(mach._parameters.at(i).has_value());
+            VERIFY_ARE_EQUAL(mach._parameters.at(i).value(), gsl::narrow_cast<VTInt>(i % 10));
+        }
     }
 
     TEST_METHOD(TestLeadingZeroCsiParam)
     {
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(AsciiChars::ESC);
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
         mach.ProcessCharacter(L'[');
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::CsiEntry);
-        for (int i = 0; i < 50; i++) // Any number of leading zeros should be supported
+        for (auto i = 0; i < 50; i++) // Any number of leading zeros should be supported
         {
             mach.ProcessCharacter(L'0');
             VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::CsiParam);
         }
-        for (int i = 0; i < 5; i++) // We're only expecting to be able to keep 5 digits max
+        for (auto i = 0; i < 5; i++) // We're only expecting to be able to keep 5 digits max
         {
             mach.ProcessCharacter((wchar_t)(L'1' + i));
             VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::CsiParam);
         }
-        VERIFY_ARE_EQUAL(*mach._pusActiveParam, 12345);
+        VERIFY_ARE_EQUAL(mach._parameters.back(), 12345);
         mach.ProcessCharacter(L'J');
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
     }
 
     TEST_METHOD(TestCsiIgnore)
     {
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(AsciiChars::ESC);
@@ -342,9 +440,27 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
     }
 
+    TEST_METHOD(TestC1Osc)
+    {
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        // Enable the acceptance of C1 control codes in the state machine.
+        mach.SetParserMode(StateMachine::Mode::AcceptC1, true);
+
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+        mach.ProcessCharacter(L'\x9d');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscParam);
+        mach.ProcessCharacter(AsciiChars::BEL);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+    }
+
     TEST_METHOD(TestOscStringSimple)
     {
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(AsciiChars::ESC);
@@ -407,9 +523,12 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
         mach.ProcessCharacter(L'\\');
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
     }
+
     TEST_METHOD(TestLongOscString)
     {
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(AsciiChars::ESC);
@@ -419,31 +538,33 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
         mach.ProcessCharacter(L'0');
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscParam);
         mach.ProcessCharacter(L';');
-        for (int i = 0; i < MAX_PATH; i++) // The buffer is only 256 long, so any longer value should work :P
+        for (auto i = 0; i < 260u; i++) // The buffer is only 256 long, so any longer value should work :P
         {
             mach.ProcessCharacter(L's');
             VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscString);
         }
-        VERIFY_ARE_EQUAL(mach._sOscNextChar, mach.s_cOscStringMaxLength - 1);
+        VERIFY_ARE_EQUAL(mach._oscString.size(), 260u);
         mach.ProcessCharacter(AsciiChars::BEL);
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
     }
 
     TEST_METHOD(NormalTestOscParam)
     {
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(AsciiChars::ESC);
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
         mach.ProcessCharacter(L']');
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscParam);
-        for (int i = 0; i < 5; i++) // We're only expecting to be able to keep 5 digits max
+        for (auto i = 0; i < 5; i++) // We're only expecting to be able to keep 5 digits max
         {
             mach.ProcessCharacter((wchar_t)(L'1' + i));
             VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscParam);
         }
-        VERIFY_ARE_EQUAL(mach._sOscParam, 12345);
+        VERIFY_ARE_EQUAL(mach._oscParameter, 12345);
         mach.ProcessCharacter(L';');
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscString);
         mach.ProcessCharacter(L's');
@@ -454,24 +575,26 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
 
     TEST_METHOD(TestLeadingZeroOscParam)
     {
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(AsciiChars::ESC);
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
         mach.ProcessCharacter(L']');
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscParam);
-        for (int i = 0; i < 50; i++) // Any number of leading zeros should be supported
+        for (auto i = 0; i < 50; i++) // Any number of leading zeros should be supported
         {
             mach.ProcessCharacter(L'0');
             VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscParam);
         }
-        for (int i = 0; i < 5; i++) // We're only expecting to be able to keep 5 digits max
+        for (auto i = 0; i < 5; i++) // We're only expecting to be able to keep 5 digits max
         {
             mach.ProcessCharacter((wchar_t)(L'1' + i));
             VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscParam);
         }
-        VERIFY_ARE_EQUAL(mach._sOscParam, 12345);
+        VERIFY_ARE_EQUAL(mach._oscParameter, 12345);
         mach.ProcessCharacter(L';');
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscString);
         mach.ProcessCharacter(L's');
@@ -482,19 +605,23 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
 
     TEST_METHOD(TestLongOscParam)
     {
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(AsciiChars::ESC);
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
         mach.ProcessCharacter(L']');
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscParam);
-        for (int i = 0; i < 6; i++) // We're only expecting to be able to keep 5 digits max
+        constexpr auto sizeMax = std::numeric_limits<size_t>::max();
+        const auto sizeMaxStr = wil::str_printf<std::wstring>(L"%zu", sizeMax);
+        for (auto& wch : sizeMaxStr)
         {
-            mach.ProcessCharacter((wchar_t)(L'1' + i));
+            mach.ProcessCharacter(wch);
             VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscParam);
         }
-        VERIFY_ARE_EQUAL(mach._sOscParam, SHORT_MAX);
+        VERIFY_ARE_EQUAL(mach._oscParameter, MAX_PARAMETER_VALUE);
         mach.ProcessCharacter(L';');
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscString);
         mach.ProcessCharacter(L's');
@@ -502,17 +629,16 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
         mach.ProcessCharacter(AsciiChars::BEL);
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
 
-        Log::Comment(L"Make sure we cap the param value to SHORT_MAX");
         mach.ProcessCharacter(AsciiChars::ESC);
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
         mach.ProcessCharacter(L']');
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscParam);
-        for (int i = 0; i < 5; i++) // We're only expecting to be able to keep 5 digits max
+        for (const auto& wch : sizeMaxStr)
         {
-            mach.ProcessCharacter((wchar_t)(L'4' + i)); // 45678 > (SHORT_MAX===32767)
+            mach.ProcessCharacter(wch);
             VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscParam);
         }
-        VERIFY_ARE_EQUAL(mach._sOscParam, SHORT_MAX);
+        VERIFY_ARE_EQUAL(mach._oscParameter, MAX_PARAMETER_VALUE);
         mach.ProcessCharacter(L';');
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscString);
         mach.ProcessCharacter(L's');
@@ -521,78 +647,334 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
     }
 
-    TEST_METHOD(TestSs3Entry)
+    TEST_METHOD(TestOscStringInvalidTermination)
     {
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(AsciiChars::ESC);
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
-        mach.ProcessCharacter(L'O');
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ss3Entry);
+        mach.ProcessCharacter(L']');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscParam);
+        mach.ProcessCharacter(L'1');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscParam);
+        mach.ProcessCharacter(L';');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscString);
+        mach.ProcessCharacter(L's');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscString);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscTermination);
+        mach.ProcessCharacter(L'['); // This is not a string terminator.
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::CsiEntry);
+        mach.ProcessCharacter(L'4');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::CsiParam);
+        mach.ProcessCharacter(L';');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::CsiParam);
         mach.ProcessCharacter(L'm');
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
     }
 
-    TEST_METHOD(TestSs3Immediate)
+    TEST_METHOD(TestDcsEntry)
     {
-        // Intermediates aren't supported by Ss3 - they just get dispatched
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(AsciiChars::ESC);
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
-        mach.ProcessCharacter(L'O');
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ss3Entry);
-        mach.ProcessCharacter(L'$');
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
-
+        mach.ProcessCharacter(L'P');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsEntry);
         mach.ProcessCharacter(AsciiChars::ESC);
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
-        mach.ProcessCharacter(L'O');
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ss3Entry);
-        mach.ProcessCharacter(L'#');
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
-
-        mach.ProcessCharacter(AsciiChars::ESC);
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
-        mach.ProcessCharacter(L'O');
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ss3Entry);
-        mach.ProcessCharacter(L'%');
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
-
-        mach.ProcessCharacter(AsciiChars::ESC);
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
-        mach.ProcessCharacter(L'O');
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ss3Entry);
-        mach.ProcessCharacter(L'?');
+        mach.ProcessCharacter(L'\\');
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
     }
 
-    TEST_METHOD(TestSs3Param)
+    TEST_METHOD(TestC1DcsEntry)
     {
-        StateMachine mach(new OutputStateMachineEngine(new DummyDispatch));
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        // Enable the acceptance of C1 control codes in the state machine.
+        mach.SetParserMode(StateMachine::Mode::AcceptC1, true);
+
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+        mach.ProcessCharacter(L'\x90');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsEntry);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'\\');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+    }
+
+    TEST_METHOD(TestDcsImmediate)
+    {
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
         mach.ProcessCharacter(AsciiChars::ESC);
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
-        mach.ProcessCharacter(L'O');
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ss3Entry);
+        mach.ProcessCharacter(L'P');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsEntry);
+        mach.ProcessCharacter(L' ');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsIntermediate);
+        mach.ProcessCharacter(L'#');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsIntermediate);
+        mach.ProcessCharacter(L'%');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsIntermediate);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'\\');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+    }
+
+    TEST_METHOD(TestDcsIgnore)
+    {
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'P');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsEntry);
+        mach.ProcessCharacter(L':');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsIgnore);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'\\');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+    }
+
+    TEST_METHOD(TestDcsParam)
+    {
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'P');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsEntry);
         mach.ProcessCharacter(L';');
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ss3Param);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsParam);
         mach.ProcessCharacter(L'3');
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ss3Param);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsParam);
         mach.ProcessCharacter(L'2');
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ss3Param);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsParam);
         mach.ProcessCharacter(L'4');
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ss3Param);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsParam);
         mach.ProcessCharacter(L';');
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ss3Param);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsParam);
         mach.ProcessCharacter(L';');
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ss3Param);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsParam);
         mach.ProcessCharacter(L'8');
-        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ss3Param);
-        mach.ProcessCharacter(L'J');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsParam);
+
+        VERIFY_ARE_EQUAL(mach._parameters.size(), 4u);
+        VERIFY_IS_FALSE(mach._parameters.at(0).has_value());
+        VERIFY_ARE_EQUAL(mach._parameters.at(1), 324);
+        VERIFY_IS_FALSE(mach._parameters.at(2).has_value());
+        VERIFY_ARE_EQUAL(mach._parameters.at(3), 8);
+
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'\\');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+    }
+
+    TEST_METHOD(TestDcsIntermediateAndPassThrough)
+    {
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'P');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsEntry);
+        mach.ProcessCharacter(L' ');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsIntermediate);
+        mach.ProcessCharacter(L'x');
+        // Note that without a dispatcher the pass through data is instead ignored.
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsIgnore);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'\\');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+    }
+
+    TEST_METHOD(TestDcsLongStringPassThrough)
+    {
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'P');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsEntry);
+        mach.ProcessCharacter(L'q');
+        // Note that without a dispatcher the pass through state is instead ignored.
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsIgnore);
+        mach.ProcessCharacter(L'#');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsIgnore);
+        mach.ProcessCharacter(L'1');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsIgnore);
+        mach.ProcessCharacter(L'N');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsIgnore);
+        mach.ProcessCharacter(L'N');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsIgnore);
+        mach.ProcessCharacter(L'N');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsIgnore);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'\\');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+    }
+
+    TEST_METHOD(TestDcsInvalidTermination)
+    {
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'P');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsEntry);
+        mach.ProcessCharacter(L'q');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsIgnore);
+        mach.ProcessCharacter(L'#');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsIgnore);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'['); // This is not a string terminator.
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::CsiEntry);
+        mach.ProcessCharacter(L'4');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::CsiParam);
+        mach.ProcessCharacter(L';');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::CsiParam);
+        mach.ProcessCharacter(L'm');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+    }
+
+    TEST_METHOD(TestSosPmApcString)
+    {
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'X');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::SosPmApcString);
+        mach.ProcessCharacter(L'1');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::SosPmApcString);
+        mach.ProcessCharacter(L'2');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::SosPmApcString);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'\\');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'^');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::SosPmApcString);
+        mach.ProcessCharacter(L'3');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::SosPmApcString);
+        mach.ProcessCharacter(L'4');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::SosPmApcString);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'\\');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'_');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::SosPmApcString);
+        mach.ProcessCharacter(L'5');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::SosPmApcString);
+        mach.ProcessCharacter(L'6');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::SosPmApcString);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'\\');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+    }
+
+    TEST_METHOD(TestC1StringTerminator)
+    {
+        auto dispatch = std::make_unique<DummyDispatch>();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        // Enable the acceptance of C1 control codes in the state machine.
+        mach.SetParserMode(StateMachine::Mode::AcceptC1, true);
+
+        // C1 ST should terminate OSC string.
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L']');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscParam);
+        mach.ProcessCharacter(L'1');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscParam);
+        mach.ProcessCharacter(L';');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscString);
+        mach.ProcessCharacter(L's');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::OscString);
+        mach.ProcessCharacter(L'\x9c');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+
+        // C1 ST should terminate DCS passthrough string.
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'P');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsEntry);
+        mach.ProcessCharacter(L'q');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsIgnore);
+        mach.ProcessCharacter(L'#');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::DcsIgnore);
+        mach.ProcessCharacter(L'1');
+        mach.ProcessCharacter(L'\x9c');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+
+        // C1 ST should terminate SOS/PM/APC string.
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'X');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::SosPmApcString);
+        mach.ProcessCharacter(L'1');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::SosPmApcString);
+        mach.ProcessCharacter(L'\x9c');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'^');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::SosPmApcString);
+        mach.ProcessCharacter(L'2');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::SosPmApcString);
+        mach.ProcessCharacter(L'\x9c');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
+
+        mach.ProcessCharacter(AsciiChars::ESC);
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Escape);
+        mach.ProcessCharacter(L'_');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::SosPmApcString);
+        mach.ProcessCharacter(L'3');
+        VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::SosPmApcString);
+        mach.ProcessCharacter(L'\x9c');
         VERIFY_ARE_EQUAL(mach._state, StateMachine::VTStates::Ground);
     }
 };
@@ -600,52 +982,71 @@ class Microsoft::Console::VirtualTerminal::OutputEngineTest final
 class StatefulDispatch final : public TermDispatch
 {
 public:
-    virtual void Execute(const wchar_t /*wchControl*/) override
+    virtual void Print(const wchar_t wchPrintable) override
     {
+        _printString += wchPrintable;
     }
 
-    virtual void Print(const wchar_t /*wchPrintable*/) override
+    virtual void PrintString(const std::wstring_view string) override
     {
-    }
-
-    virtual void PrintString(const wchar_t* const /*rgwch*/, const size_t /*cch*/) override
-    {
+        _printString += string;
     }
 
     StatefulDispatch() :
-        _uiCursorDistance{ 0 },
-        _uiLine{ 0 },
-        _uiColumn{ 0 },
-        _fCursorUp{ false },
-        _fCursorDown{ false },
-        _fCursorBackward{ false },
-        _fCursorForward{ false },
-        _fCursorNextLine{ false },
-        _fCursorPreviousLine{ false },
-        _fCursorHorizontalPositionAbsolute{ false },
-        _fVerticalLinePositionAbsolute{ false },
-        _fCursorPosition{ false },
-        _fCursorSave{ false },
-        _fCursorLoad{ false },
-        _fCursorVisible{ true },
-        _fEraseDisplay{ false },
-        _fEraseLine{ false },
-        _fInsertCharacter{ false },
-        _fDeleteCharacter{ false },
+        _cursorDistance{ 0 },
+        _line{ 0 },
+        _column{ 0 },
+        _cursorUp{ false },
+        _cursorDown{ false },
+        _cursorBackward{ false },
+        _cursorForward{ false },
+        _cursorNextLine{ false },
+        _cursorPreviousLine{ false },
+        _cursorHorizontalPositionAbsolute{ false },
+        _verticalLinePositionAbsolute{ false },
+        _horizontalPositionRelative{ false },
+        _verticalPositionRelative{ false },
+        _cursorPosition{ false },
+        _cursorSave{ false },
+        _cursorLoad{ false },
+        _eraseDisplay{ false },
+        _eraseLine{ false },
+        _insertCharacter{ false },
+        _deleteCharacter{ false },
         _eraseType{ (DispatchTypes::EraseType)-1 },
-        _fSetGraphics{ false },
-        _statusReportType{ (DispatchTypes::AnsiStatusType)-1 },
-        _fDeviceStatusReport{ false },
-        _fDeviceAttributes{ false },
-        _cOptions{ 0 },
-        _fIsAltBuffer{ false },
-        _fCursorKeysMode{ false },
-        _fCursorBlinking{ true },
-        _fIsOriginModeRelative{ false },
-        _fIsDECCOLMAllowed{ false },
-        _uiWindowWidth{ 80 }
+        _eraseTypes{},
+        _setGraphics{ false },
+        _statusReportType{ (DispatchTypes::StatusType)-1 },
+        _deviceStatusReport{ false },
+        _deviceAttributes{ false },
+        _secondaryDeviceAttributes{ false },
+        _tertiaryDeviceAttributes{ false },
+        _vt52DeviceAttributes{ false },
+        _requestTerminalParameters{ false },
+        _reportingPermission{ (DispatchTypes::ReportingPermission)-1 },
+        _modeType{ (DispatchTypes::ModeParams)-1 },
+        _modeTypes{},
+        _modeEnabled{ false },
+        _warningBell{ false },
+        _carriageReturn{ false },
+        _lineFeed{ false },
+        _lineFeedType{ (DispatchTypes::LineFeedType)-1 },
+        _reverseLineFeed{ false },
+        _forwardTab{ false },
+        _numTabs{ 0 },
+        _tabClear{ false },
+        _tabClearTypes{},
+        _setDefaultForeground(false),
+        _defaultForegroundColor{ RGB(0, 0, 0) },
+        _setDefaultBackground(false),
+        _defaultBackgroundColor{ RGB(0, 0, 0) },
+        _setDefaultCursorColor(false),
+        _defaultCursorColor{ RGB(0, 0, 0) },
+        _hyperlinkMode{ false },
+        _options{ s_cMaxOptions, static_cast<DispatchTypes::GraphicsOptions>(s_uiGraphicsCleared) }, // fill with cleared option
+        _colorTable{},
+        _setColorTableEntry{ false }
     {
-        memset(_rgOptions, s_uiGraphicsCleared, sizeof(_rgOptions));
     }
 
     void ClearState()
@@ -654,280 +1055,365 @@ public:
         *this = dispatch;
     }
 
-    bool CursorUp(_In_ unsigned int const uiDistance) override
+    bool CursorUp(const VTInt uiDistance) noexcept override
     {
-        _fCursorUp = true;
-        _uiCursorDistance = uiDistance;
+        _cursorUp = true;
+        _cursorDistance = uiDistance;
         return true;
     }
 
-    bool CursorDown(_In_ unsigned int const uiDistance) override
+    bool CursorDown(const VTInt uiDistance) noexcept override
     {
-        _fCursorDown = true;
-        _uiCursorDistance = uiDistance;
+        _cursorDown = true;
+        _cursorDistance = uiDistance;
         return true;
     }
 
-    bool CursorBackward(_In_ unsigned int const uiDistance) override
+    bool CursorBackward(const VTInt uiDistance) noexcept override
     {
-        _fCursorBackward = true;
-        _uiCursorDistance = uiDistance;
+        _cursorBackward = true;
+        _cursorDistance = uiDistance;
         return true;
     }
 
-    bool CursorForward(_In_ unsigned int const uiDistance) override
+    bool CursorForward(const VTInt uiDistance) noexcept override
     {
-        _fCursorForward = true;
-        _uiCursorDistance = uiDistance;
+        _cursorForward = true;
+        _cursorDistance = uiDistance;
         return true;
     }
 
-    bool CursorNextLine(_In_ unsigned int const uiDistance) override
+    bool CursorNextLine(const VTInt uiDistance) noexcept override
     {
-        _fCursorNextLine = true;
-        _uiCursorDistance = uiDistance;
+        _cursorNextLine = true;
+        _cursorDistance = uiDistance;
         return true;
     }
 
-    bool CursorPrevLine(_In_ unsigned int const uiDistance) override
+    bool CursorPrevLine(const VTInt uiDistance) noexcept override
     {
-        _fCursorPreviousLine = true;
-        _uiCursorDistance = uiDistance;
+        _cursorPreviousLine = true;
+        _cursorDistance = uiDistance;
         return true;
     }
 
-    bool CursorHorizontalPositionAbsolute(_In_ unsigned int const uiPosition) override
+    bool CursorHorizontalPositionAbsolute(const VTInt uiPosition) noexcept override
     {
-        _fCursorHorizontalPositionAbsolute = true;
-        _uiCursorDistance = uiPosition;
+        _cursorHorizontalPositionAbsolute = true;
+        _cursorDistance = uiPosition;
         return true;
     }
 
-    bool VerticalLinePositionAbsolute(_In_ unsigned int const uiPosition) override
+    bool VerticalLinePositionAbsolute(const VTInt uiPosition) noexcept override
     {
-        _fVerticalLinePositionAbsolute = true;
-        _uiCursorDistance = uiPosition;
+        _verticalLinePositionAbsolute = true;
+        _cursorDistance = uiPosition;
         return true;
     }
 
-    bool CursorPosition(_In_ unsigned int const uiLine, _In_ unsigned int const uiColumn) override
+    bool HorizontalPositionRelative(const VTInt uiDistance) noexcept override
     {
-        _fCursorPosition = true;
-        _uiLine = uiLine;
-        _uiColumn = uiColumn;
+        _horizontalPositionRelative = true;
+        _cursorDistance = uiDistance;
         return true;
     }
 
-    bool CursorSaveState() override
+    bool VerticalPositionRelative(const VTInt uiDistance) noexcept override
     {
-        _fCursorSave = true;
+        _verticalPositionRelative = true;
+        _cursorDistance = uiDistance;
         return true;
     }
 
-    bool CursorRestoreState() override
+    bool CursorPosition(const VTInt uiLine, const VTInt uiColumn) noexcept override
     {
-        _fCursorLoad = true;
+        _cursorPosition = true;
+        _line = uiLine;
+        _column = uiColumn;
         return true;
     }
 
-    bool EraseInDisplay(const DispatchTypes::EraseType eraseType) override
+    bool CursorSaveState() noexcept override
     {
-        _fEraseDisplay = true;
+        _cursorSave = true;
+        return true;
+    }
+
+    bool CursorRestoreState() noexcept override
+    {
+        _cursorLoad = true;
+        return true;
+    }
+
+    bool EraseInDisplay(const DispatchTypes::EraseType eraseType) noexcept override
+    {
+        _eraseDisplay = true;
         _eraseType = eraseType;
+        _eraseTypes.push_back(eraseType);
         return true;
     }
 
-    bool EraseInLine(const DispatchTypes::EraseType eraseType) override
+    bool EraseInLine(const DispatchTypes::EraseType eraseType) noexcept override
     {
-        _fEraseLine = true;
+        _eraseLine = true;
         _eraseType = eraseType;
+        _eraseTypes.push_back(eraseType);
         return true;
     }
 
-    bool InsertCharacter(_In_ unsigned int const uiCount) override
+    bool InsertCharacter(const VTInt uiCount) noexcept override
     {
-        _fInsertCharacter = true;
-        _uiCursorDistance = uiCount;
+        _insertCharacter = true;
+        _cursorDistance = uiCount;
         return true;
     }
 
-    bool DeleteCharacter(_In_ unsigned int const uiCount) override
+    bool DeleteCharacter(const VTInt uiCount) noexcept override
     {
-        _fDeleteCharacter = true;
-        _uiCursorDistance = uiCount;
+        _deleteCharacter = true;
+        _cursorDistance = uiCount;
         return true;
     }
 
-    bool CursorVisibility(const bool fIsVisible) override
+    bool SetGraphicsRendition(const VTParameters options) noexcept override
+    try
     {
-        _fCursorVisible = fIsVisible;
+        _options.clear();
+        for (size_t i = 0; i < options.size(); i++)
+        {
+            _options.push_back(options.at(i));
+        }
+        _setGraphics = true;
         return true;
     }
+    CATCH_LOG_RETURN_FALSE()
 
-    bool SetGraphicsRendition(_In_reads_(cOptions) const DispatchTypes::GraphicsOptions* const rgOptions,
-                              const size_t cOptions) override
+    bool DeviceStatusReport(const DispatchTypes::StatusType statusType, const VTParameter /*id*/) noexcept override
     {
-        size_t cCopyLength = std::min(cOptions, s_cMaxOptions); // whichever is smaller, our buffer size or the number given
-        _cOptions = cCopyLength;
-        memcpy(_rgOptions, rgOptions, _cOptions * sizeof(DispatchTypes::GraphicsOptions));
-
-        _fSetGraphics = true;
-
-        return true;
-    }
-
-    bool DeviceStatusReport(const DispatchTypes::AnsiStatusType statusType) override
-    {
-        _fDeviceStatusReport = true;
+        _deviceStatusReport = true;
         _statusReportType = statusType;
 
         return true;
     }
 
-    bool DeviceAttributes() override
+    bool DeviceAttributes() noexcept override
     {
-        _fDeviceAttributes = true;
+        _deviceAttributes = true;
 
         return true;
     }
 
-    bool _PrivateModeParamsHelper(_In_ DispatchTypes::PrivateModeParams const param, const bool fEnable)
+    bool SecondaryDeviceAttributes() noexcept override
     {
-        bool fSuccess = false;
-        switch (param)
+        _secondaryDeviceAttributes = true;
+
+        return true;
+    }
+
+    bool TertiaryDeviceAttributes() noexcept override
+    {
+        _tertiaryDeviceAttributes = true;
+
+        return true;
+    }
+
+    bool Vt52DeviceAttributes() noexcept override
+    {
+        _vt52DeviceAttributes = true;
+
+        return true;
+    }
+
+    bool RequestTerminalParameters(const DispatchTypes::ReportingPermission permission) noexcept override
+    {
+        _requestTerminalParameters = true;
+        _reportingPermission = permission;
+
+        return true;
+    }
+
+    bool _ModeParamsHelper(_In_ DispatchTypes::ModeParams const param, const bool fEnable)
+    {
+        _modeType = param;
+        _modeTypes.push_back(param);
+        _modeEnabled = fEnable;
+
+        return true;
+    }
+
+    bool SetMode(const DispatchTypes::ModeParams param) noexcept override
+    {
+        return _ModeParamsHelper(param, true);
+    }
+
+    bool ResetMode(const DispatchTypes::ModeParams param) noexcept override
+    {
+        return _ModeParamsHelper(param, false);
+    }
+
+    bool SetAnsiMode(const bool ansiMode) noexcept override
+    {
+        _ModeParamsHelper(DispatchTypes::DECANM_AnsiMode, ansiMode);
+        return true;
+    }
+
+    bool WarningBell() noexcept override
+    {
+        _warningBell = true;
+        return true;
+    }
+
+    bool CarriageReturn() noexcept override
+    {
+        _carriageReturn = true;
+        return true;
+    }
+
+    bool LineFeed(const DispatchTypes::LineFeedType lineFeedType) noexcept override
+    {
+        _lineFeed = true;
+        _lineFeedType = lineFeedType;
+        return true;
+    }
+
+    bool ReverseLineFeed() noexcept override
+    {
+        _reverseLineFeed = true;
+        return true;
+    }
+
+    bool ForwardTab(const VTInt numTabs) noexcept override
+    {
+        _forwardTab = true;
+        _numTabs = numTabs;
+        return true;
+    }
+
+    bool TabClear(const DispatchTypes::TabClearType clearType) noexcept override
+    {
+        _tabClear = true;
+        _tabClearTypes.push_back(clearType);
+        return true;
+    }
+    bool SetColorTableEntry(const size_t tableIndex, const COLORREF color) noexcept override
+    {
+        _setColorTableEntry = true;
+        _colorTable.at(tableIndex) = color;
+        return true;
+    }
+
+    bool SetDefaultForeground(const DWORD color) noexcept override
+    {
+        _setDefaultForeground = true;
+        _defaultForegroundColor = color;
+        return true;
+    }
+
+    bool SetDefaultBackground(const DWORD color) noexcept override
+    {
+        _setDefaultBackground = true;
+        _defaultBackgroundColor = color;
+        return true;
+    }
+
+    bool SetCursorColor(const DWORD color) noexcept override
+    {
+        _setDefaultCursorColor = true;
+        _defaultCursorColor = color;
+        return true;
+    }
+
+    bool SetClipboard(std::wstring_view content) noexcept override
+    {
+        _copyContent = { content.begin(), content.end() };
+        return true;
+    }
+
+    bool AddHyperlink(std::wstring_view uri, std::wstring_view params) noexcept override
+    {
+        _hyperlinkMode = true;
+        _uri = uri;
+        if (!params.empty())
         {
-        case DispatchTypes::PrivateModeParams::DECCKM_CursorKeysMode:
-            // set - Enable Application Mode, reset - Numeric/normal mode
-            fSuccess = SetVirtualTerminalInputMode(fEnable);
-            break;
-        case DispatchTypes::PrivateModeParams::DECCOLM_SetNumberOfColumns:
-            fSuccess = SetColumns(static_cast<unsigned int>(fEnable ? DispatchTypes::s_sDECCOLMSetColumns : DispatchTypes::s_sDECCOLMResetColumns));
-            break;
-        case DispatchTypes::PrivateModeParams::DECOM_OriginMode:
-            // The cursor is also moved to the new home position when the origin mode is set or reset.
-            fSuccess = SetOriginMode(fEnable) && CursorPosition(1, 1);
-            break;
-        case DispatchTypes::PrivateModeParams::ATT610_StartCursorBlink:
-            fSuccess = EnableCursorBlinking(fEnable);
-            break;
-        case DispatchTypes::PrivateModeParams::DECTCEM_TextCursorEnableMode:
-            fSuccess = CursorVisibility(fEnable);
-            break;
-        case DispatchTypes::PrivateModeParams::XTERM_EnableDECCOLMSupport:
-            fSuccess = EnableDECCOLMSupport(fEnable);
-            break;
-        case DispatchTypes::PrivateModeParams::ASB_AlternateScreenBuffer:
-            fSuccess = fEnable ? UseAlternateScreenBuffer() : UseMainScreenBuffer();
-            break;
-        default:
-            // If no functions to call, overall dispatch was a failure.
-            fSuccess = false;
-            break;
+            _customId = params;
         }
-        return fSuccess;
-    }
-
-    bool _SetResetPrivateModesHelper(_In_reads_(cParams) const DispatchTypes::PrivateModeParams* const rParams,
-                                     const size_t cParams,
-                                     const bool fEnable)
-    {
-        size_t cFailures = 0;
-        for (size_t i = 0; i < cParams; i++)
-        {
-            cFailures += _PrivateModeParamsHelper(rParams[i], fEnable) ? 0 : 1; // increment the number of failures if we fail.
-        }
-        return cFailures == 0;
-    }
-
-    bool SetPrivateModes(_In_reads_(cParams) const DispatchTypes::PrivateModeParams* const rParams,
-                         const size_t cParams) override
-    {
-        return _SetResetPrivateModesHelper(rParams, cParams, true);
-    }
-
-    bool ResetPrivateModes(_In_reads_(cParams) const DispatchTypes::PrivateModeParams* const rParams,
-                           const size_t cParams) override
-    {
-        return _SetResetPrivateModesHelper(rParams, cParams, false);
-    }
-
-    bool SetColumns(_In_ unsigned int const uiColumns) override
-    {
-        _uiWindowWidth = uiColumns;
         return true;
     }
 
-    bool SetVirtualTerminalInputMode(const bool fApplicationMode)
+    bool EndHyperlink() noexcept override
     {
-        _fCursorKeysMode = fApplicationMode;
+        _hyperlinkMode = false;
+        _uri.clear();
+        _customId.clear();
         return true;
     }
 
-    bool EnableCursorBlinking(const bool bEnable) override
+    bool DoConEmuAction(const std::wstring_view /*string*/) noexcept override
     {
-        _fCursorBlinking = bEnable;
         return true;
     }
 
-    bool SetOriginMode(const bool fRelativeMode) override
-    {
-        _fIsOriginModeRelative = fRelativeMode;
-        return true;
-    }
-
-    bool EnableDECCOLMSupport(const bool fEnabled) override
-    {
-        _fIsDECCOLMAllowed = fEnabled;
-        return true;
-    }
-
-    bool UseAlternateScreenBuffer() override
-    {
-        _fIsAltBuffer = true;
-        return true;
-    }
-
-    bool UseMainScreenBuffer() override
-    {
-        _fIsAltBuffer = false;
-        return true;
-    }
-
-    unsigned int _uiCursorDistance;
-    unsigned int _uiLine;
-    unsigned int _uiColumn;
-    bool _fCursorUp;
-    bool _fCursorDown;
-    bool _fCursorBackward;
-    bool _fCursorForward;
-    bool _fCursorNextLine;
-    bool _fCursorPreviousLine;
-    bool _fCursorHorizontalPositionAbsolute;
-    bool _fVerticalLinePositionAbsolute;
-    bool _fCursorPosition;
-    bool _fCursorSave;
-    bool _fCursorLoad;
-    bool _fCursorVisible;
-    bool _fEraseDisplay;
-    bool _fEraseLine;
-    bool _fInsertCharacter;
-    bool _fDeleteCharacter;
+    std::wstring _printString;
+    size_t _cursorDistance;
+    size_t _line;
+    size_t _column;
+    bool _cursorUp;
+    bool _cursorDown;
+    bool _cursorBackward;
+    bool _cursorForward;
+    bool _cursorNextLine;
+    bool _cursorPreviousLine;
+    bool _cursorHorizontalPositionAbsolute;
+    bool _verticalLinePositionAbsolute;
+    bool _horizontalPositionRelative;
+    bool _verticalPositionRelative;
+    bool _cursorPosition;
+    bool _cursorSave;
+    bool _cursorLoad;
+    bool _eraseDisplay;
+    bool _eraseLine;
+    bool _insertCharacter;
+    bool _deleteCharacter;
     DispatchTypes::EraseType _eraseType;
-    bool _fSetGraphics;
-    DispatchTypes::AnsiStatusType _statusReportType;
-    bool _fDeviceStatusReport;
-    bool _fDeviceAttributes;
-    bool _fIsAltBuffer;
-    bool _fCursorKeysMode;
-    bool _fCursorBlinking;
-    bool _fIsOriginModeRelative;
-    bool _fIsDECCOLMAllowed;
-    unsigned int _uiWindowWidth;
+    std::vector<DispatchTypes::EraseType> _eraseTypes;
+    bool _setGraphics;
+    DispatchTypes::StatusType _statusReportType;
+    bool _deviceStatusReport;
+    bool _deviceAttributes;
+    bool _secondaryDeviceAttributes;
+    bool _tertiaryDeviceAttributes;
+    bool _vt52DeviceAttributes;
+    bool _requestTerminalParameters;
+    DispatchTypes::ReportingPermission _reportingPermission;
+    DispatchTypes::ModeParams _modeType;
+    std::vector<DispatchTypes::ModeParams> _modeTypes;
+    bool _modeEnabled;
+    bool _warningBell;
+    bool _carriageReturn;
+    bool _lineFeed;
+    DispatchTypes::LineFeedType _lineFeedType;
+    bool _reverseLineFeed;
+    bool _forwardTab;
+    size_t _numTabs;
+    bool _tabClear;
+    std::vector<DispatchTypes::TabClearType> _tabClearTypes;
+    bool _setDefaultForeground;
+    DWORD _defaultForegroundColor;
+    bool _setDefaultBackground;
+    DWORD _defaultBackgroundColor;
+    bool _setDefaultCursorColor;
+    DWORD _defaultCursorColor;
+    bool _setColorTableEntry;
+    bool _hyperlinkMode;
+    std::wstring _copyContent;
+    std::wstring _uri;
+    std::wstring _customId;
 
     static const size_t s_cMaxOptions = 16;
-    static const unsigned int s_uiGraphicsCleared = UINT_MAX;
-    DispatchTypes::GraphicsOptions _rgOptions[s_cMaxOptions];
-    size_t _cOptions;
+    static const size_t s_uiGraphicsCleared = UINT_MAX;
+    static const size_t XTERM_COLOR_TABLE_SIZE = 256;
+    std::vector<DispatchTypes::GraphicsOptions> _options;
+    std::array<COLORREF, XTERM_COLOR_TABLE_SIZE> _colorTable;
 };
 
 class StateMachineExternalTest final
@@ -939,68 +1425,45 @@ class StateMachineExternalTest final
         return true;
     }
 
-    void TestEscCursorMovement(wchar_t const wchCommand,
-                               const bool* const pfFlag,
-                               StateMachine& mach,
-                               StatefulDispatch& dispatch)
-    {
-        mach.ProcessCharacter(AsciiChars::ESC);
-        mach.ProcessCharacter(wchCommand);
-
-        VERIFY_IS_TRUE(*pfFlag);
-        VERIFY_ARE_EQUAL(dispatch._uiCursorDistance, 1u);
-    }
-
-    TEST_METHOD(TestEscCursorMovement)
-    {
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
-
-        TestEscCursorMovement(L'A', &pDispatch->_fCursorUp, mach, *pDispatch);
-        TestEscCursorMovement(L'B', &pDispatch->_fCursorDown, mach, *pDispatch);
-        TestEscCursorMovement(L'C', &pDispatch->_fCursorForward, mach, *pDispatch);
-        TestEscCursorMovement(L'D', &pDispatch->_fCursorBackward, mach, *pDispatch);
-    }
-
-    void InsertNumberToMachine(StateMachine* const pMachine, unsigned int uiNumber)
+    void InsertNumberToMachine(StateMachine* const pMachine, size_t number)
     {
         static const size_t cchBufferMax = 20;
 
         wchar_t pwszDistance[cchBufferMax];
-        int cchDistance = swprintf_s(pwszDistance, cchBufferMax, L"%d", uiNumber);
+        auto cchDistance = swprintf_s(pwszDistance, cchBufferMax, L"%zu", number);
 
         if (cchDistance > 0 && cchDistance < cchBufferMax)
         {
-            for (int i = 0; i < cchDistance; i++)
+            for (auto i = 0; i < cchDistance; i++)
             {
                 pMachine->ProcessCharacter(pwszDistance[i]);
             }
         }
     }
 
-    void ApplyParameterBoundary(unsigned int* uiExpected, unsigned int uiGiven)
+    void ApplyParameterBoundary(size_t* uiExpected, size_t uiGiven)
     {
         // 0 and 1 should be 1. Use the preset value.
-        // 1-SHORT_MAX should be what we set.
-        // > SHORT_MAX should be SHORT_MAX.
+        // 1-MAX_PARAMETER_VALUE should be what we set.
+        // > MAX_PARAMETER_VALUE should be MAX_PARAMETER_VALUE.
         if (uiGiven <= 1)
         {
             *uiExpected = 1u;
         }
-        else if (uiGiven > 1 && uiGiven <= SHORT_MAX)
+        else if (uiGiven > 1 && uiGiven <= MAX_PARAMETER_VALUE)
         {
             *uiExpected = uiGiven;
         }
-        else if (uiGiven > SHORT_MAX)
+        else if (uiGiven > MAX_PARAMETER_VALUE)
         {
-            *uiExpected = SHORT_MAX; // 16383 is our max value.
+            *uiExpected = MAX_PARAMETER_VALUE;
         }
     }
 
-    void TestCsiCursorMovement(wchar_t const wchCommand,
-                               unsigned int const uiDistance,
+    void TestCsiCursorMovement(const wchar_t wchCommand,
+                               const size_t uiDistance,
                                const bool fUseDistance,
+                               const bool fAddExtraParam,
                                const bool* const pfFlag,
                                StateMachine& mach,
                                StatefulDispatch& dispatch)
@@ -1011,86 +1474,106 @@ class StateMachineExternalTest final
         if (fUseDistance)
         {
             InsertNumberToMachine(&mach, uiDistance);
+
+            // Extraneous parameters should be ignored.
+            if (fAddExtraParam)
+            {
+                mach.ProcessCharacter(L';');
+                mach.ProcessCharacter(L'9');
+            }
         }
 
         mach.ProcessCharacter(wchCommand);
 
         VERIFY_IS_TRUE(*pfFlag);
 
-        unsigned int uiExpectedDistance = 1u;
+        size_t uiExpectedDistance = 1u;
 
         if (fUseDistance)
         {
             ApplyParameterBoundary(&uiExpectedDistance, uiDistance);
         }
 
-        VERIFY_ARE_EQUAL(dispatch._uiCursorDistance, uiExpectedDistance);
+        VERIFY_ARE_EQUAL(dispatch._cursorDistance, uiExpectedDistance);
     }
 
     TEST_METHOD(TestCsiCursorMovementWithValues)
     {
         BEGIN_TEST_METHOD_PROPERTIES()
             TEST_METHOD_PROPERTY(L"Data:uiDistance", PARAM_VALUES)
+            TEST_METHOD_PROPERTY(L"Data:fExtraParam", L"{false,true}")
         END_TEST_METHOD_PROPERTIES()
 
-        unsigned int uiDistance;
+        size_t uiDistance;
         VERIFY_SUCCEEDED_RETURN(TestData::TryGetValue(L"uiDistance", uiDistance));
+        bool fExtra;
+        VERIFY_SUCCEEDED_RETURN(TestData::TryGetValue(L"fExtraParam", fExtra));
 
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
-        TestCsiCursorMovement(L'A', uiDistance, true, &pDispatch->_fCursorUp, mach, *pDispatch);
+        TestCsiCursorMovement(L'A', uiDistance, true, fExtra, &pDispatch->_cursorUp, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'B', uiDistance, true, &pDispatch->_fCursorDown, mach, *pDispatch);
+        TestCsiCursorMovement(L'B', uiDistance, true, fExtra, &pDispatch->_cursorDown, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'C', uiDistance, true, &pDispatch->_fCursorForward, mach, *pDispatch);
+        TestCsiCursorMovement(L'C', uiDistance, true, fExtra, &pDispatch->_cursorForward, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'D', uiDistance, true, &pDispatch->_fCursorBackward, mach, *pDispatch);
+        TestCsiCursorMovement(L'D', uiDistance, true, fExtra, &pDispatch->_cursorBackward, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'E', uiDistance, true, &pDispatch->_fCursorNextLine, mach, *pDispatch);
+        TestCsiCursorMovement(L'E', uiDistance, true, fExtra, &pDispatch->_cursorNextLine, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'F', uiDistance, true, &pDispatch->_fCursorPreviousLine, mach, *pDispatch);
+        TestCsiCursorMovement(L'F', uiDistance, true, fExtra, &pDispatch->_cursorPreviousLine, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'G', uiDistance, true, &pDispatch->_fCursorHorizontalPositionAbsolute, mach, *pDispatch);
+        TestCsiCursorMovement(L'G', uiDistance, true, fExtra, &pDispatch->_cursorHorizontalPositionAbsolute, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'`', uiDistance, true, &pDispatch->_fCursorHorizontalPositionAbsolute, mach, *pDispatch);
+        TestCsiCursorMovement(L'`', uiDistance, true, fExtra, &pDispatch->_cursorHorizontalPositionAbsolute, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'd', uiDistance, true, &pDispatch->_fVerticalLinePositionAbsolute, mach, *pDispatch);
+        TestCsiCursorMovement(L'd', uiDistance, true, fExtra, &pDispatch->_verticalLinePositionAbsolute, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'@', uiDistance, true, &pDispatch->_fInsertCharacter, mach, *pDispatch);
+        TestCsiCursorMovement(L'a', uiDistance, true, fExtra, &pDispatch->_horizontalPositionRelative, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'P', uiDistance, true, &pDispatch->_fDeleteCharacter, mach, *pDispatch);
+        TestCsiCursorMovement(L'e', uiDistance, true, fExtra, &pDispatch->_verticalPositionRelative, mach, *pDispatch);
+        pDispatch->ClearState();
+        TestCsiCursorMovement(L'@', uiDistance, true, fExtra, &pDispatch->_insertCharacter, mach, *pDispatch);
+        pDispatch->ClearState();
+        TestCsiCursorMovement(L'P', uiDistance, true, fExtra, &pDispatch->_deleteCharacter, mach, *pDispatch);
     }
 
     TEST_METHOD(TestCsiCursorMovementWithoutValues)
     {
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
-        unsigned int uiDistance = 9999; // this value should be ignored with the false below.
-        TestCsiCursorMovement(L'A', uiDistance, false, &pDispatch->_fCursorUp, mach, *pDispatch);
+        size_t uiDistance = 9999; // this value should be ignored with the false below.
+        TestCsiCursorMovement(L'A', uiDistance, false, false, &pDispatch->_cursorUp, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'B', uiDistance, false, &pDispatch->_fCursorDown, mach, *pDispatch);
+        TestCsiCursorMovement(L'B', uiDistance, false, false, &pDispatch->_cursorDown, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'C', uiDistance, false, &pDispatch->_fCursorForward, mach, *pDispatch);
+        TestCsiCursorMovement(L'C', uiDistance, false, false, &pDispatch->_cursorForward, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'D', uiDistance, false, &pDispatch->_fCursorBackward, mach, *pDispatch);
+        TestCsiCursorMovement(L'D', uiDistance, false, false, &pDispatch->_cursorBackward, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'E', uiDistance, false, &pDispatch->_fCursorNextLine, mach, *pDispatch);
+        TestCsiCursorMovement(L'E', uiDistance, false, false, &pDispatch->_cursorNextLine, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'F', uiDistance, false, &pDispatch->_fCursorPreviousLine, mach, *pDispatch);
+        TestCsiCursorMovement(L'F', uiDistance, false, false, &pDispatch->_cursorPreviousLine, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'G', uiDistance, false, &pDispatch->_fCursorHorizontalPositionAbsolute, mach, *pDispatch);
+        TestCsiCursorMovement(L'G', uiDistance, false, false, &pDispatch->_cursorHorizontalPositionAbsolute, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'`', uiDistance, false, &pDispatch->_fCursorHorizontalPositionAbsolute, mach, *pDispatch);
+        TestCsiCursorMovement(L'`', uiDistance, false, false, &pDispatch->_cursorHorizontalPositionAbsolute, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'd', uiDistance, false, &pDispatch->_fVerticalLinePositionAbsolute, mach, *pDispatch);
+        TestCsiCursorMovement(L'd', uiDistance, false, false, &pDispatch->_verticalLinePositionAbsolute, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'@', uiDistance, false, &pDispatch->_fInsertCharacter, mach, *pDispatch);
+        TestCsiCursorMovement(L'a', uiDistance, false, false, &pDispatch->_horizontalPositionRelative, mach, *pDispatch);
         pDispatch->ClearState();
-        TestCsiCursorMovement(L'P', uiDistance, false, &pDispatch->_fDeleteCharacter, mach, *pDispatch);
+        TestCsiCursorMovement(L'e', uiDistance, false, false, &pDispatch->_verticalPositionRelative, mach, *pDispatch);
+        pDispatch->ClearState();
+        TestCsiCursorMovement(L'@', uiDistance, false, false, &pDispatch->_insertCharacter, mach, *pDispatch);
+        pDispatch->ClearState();
+        TestCsiCursorMovement(L'P', uiDistance, false, false, &pDispatch->_deleteCharacter, mach, *pDispatch);
     }
 
     TEST_METHOD(TestCsiCursorPosition)
@@ -1100,14 +1583,15 @@ class StateMachineExternalTest final
             TEST_METHOD_PROPERTY(L"Data:uiCol", PARAM_VALUES)
         END_TEST_METHOD_PROPERTIES()
 
-        unsigned int uiRow;
+        size_t uiRow;
         VERIFY_SUCCEEDED_RETURN(TestData::TryGetValue(L"uiRow", uiRow));
-        unsigned int uiCol;
+        size_t uiCol;
         VERIFY_SUCCEEDED_RETURN(TestData::TryGetValue(L"uiCol", uiCol));
 
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         mach.ProcessCharacter(AsciiChars::ESC);
         mach.ProcessCharacter(L'[');
@@ -1121,9 +1605,9 @@ class StateMachineExternalTest final
         ApplyParameterBoundary(&uiRow, uiRow);
         ApplyParameterBoundary(&uiCol, uiCol);
 
-        VERIFY_IS_TRUE(pDispatch->_fCursorPosition);
-        VERIFY_ARE_EQUAL(pDispatch->_uiLine, uiRow);
-        VERIFY_ARE_EQUAL(pDispatch->_uiColumn, uiCol);
+        VERIFY_IS_TRUE(pDispatch->_cursorPosition);
+        VERIFY_ARE_EQUAL(pDispatch->_line, uiRow);
+        VERIFY_ARE_EQUAL(pDispatch->_column, uiCol);
     }
 
     TEST_METHOD(TestCsiCursorPositionWithOnlyRow)
@@ -1132,12 +1616,13 @@ class StateMachineExternalTest final
             TEST_METHOD_PROPERTY(L"Data:uiRow", PARAM_VALUES)
         END_TEST_METHOD_PROPERTIES()
 
-        unsigned int uiRow;
+        size_t uiRow;
         VERIFY_SUCCEEDED_RETURN(TestData::TryGetValue(L"uiRow", uiRow));
 
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         mach.ProcessCharacter(AsciiChars::ESC);
         mach.ProcessCharacter(L'[');
@@ -1148,188 +1633,118 @@ class StateMachineExternalTest final
         // bound the row/col values by the max we expect
         ApplyParameterBoundary(&uiRow, uiRow);
 
-        VERIFY_IS_TRUE(pDispatch->_fCursorPosition);
-        VERIFY_ARE_EQUAL(pDispatch->_uiLine, uiRow);
-        VERIFY_ARE_EQUAL(pDispatch->_uiColumn, (unsigned int)1); // Without the second param, the column should always be the default
+        VERIFY_IS_TRUE(pDispatch->_cursorPosition);
+        VERIFY_ARE_EQUAL(pDispatch->_line, uiRow);
+        VERIFY_ARE_EQUAL(pDispatch->_column, (size_t)1); // Without the second param, the column should always be the default
     }
 
     TEST_METHOD(TestCursorSaveLoad)
     {
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         mach.ProcessCharacter(AsciiChars::ESC);
         mach.ProcessCharacter(L'7');
-        VERIFY_IS_TRUE(pDispatch->_fCursorSave);
+        VERIFY_IS_TRUE(pDispatch->_cursorSave);
 
         pDispatch->ClearState();
 
         mach.ProcessCharacter(AsciiChars::ESC);
         mach.ProcessCharacter(L'8');
-        VERIFY_IS_TRUE(pDispatch->_fCursorLoad);
+        VERIFY_IS_TRUE(pDispatch->_cursorLoad);
 
         pDispatch->ClearState();
 
         mach.ProcessCharacter(AsciiChars::ESC);
         mach.ProcessCharacter(L'[');
         mach.ProcessCharacter(L's');
-        VERIFY_IS_TRUE(pDispatch->_fCursorSave);
+        VERIFY_IS_TRUE(pDispatch->_cursorSave);
 
         pDispatch->ClearState();
 
         mach.ProcessCharacter(AsciiChars::ESC);
         mach.ProcessCharacter(L'[');
         mach.ProcessCharacter(L'u');
-        VERIFY_IS_TRUE(pDispatch->_fCursorLoad);
+        VERIFY_IS_TRUE(pDispatch->_cursorLoad);
 
         pDispatch->ClearState();
     }
 
-    TEST_METHOD(TestCursorKeysMode)
+    TEST_METHOD(TestAnsiMode)
     {
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
-        mach.ProcessString(L"\x1b[?1h", 5);
-        VERIFY_IS_TRUE(pDispatch->_fCursorKeysMode);
+        pDispatch->_modeEnabled = true;
+        mach.ProcessString(L"\x1b[?2l");
+        VERIFY_ARE_EQUAL(DispatchTypes::DECANM_AnsiMode, pDispatch->_modeType);
+        VERIFY_IS_FALSE(pDispatch->_modeEnabled);
 
         pDispatch->ClearState();
+        mach.SetParserMode(StateMachine::Mode::Ansi, false);
 
-        mach.ProcessString(L"\x1b[?1l", 5);
-        VERIFY_IS_FALSE(pDispatch->_fCursorKeysMode);
+        mach.ProcessString(L"\x1b<");
+        VERIFY_ARE_EQUAL(DispatchTypes::DECANM_AnsiMode, pDispatch->_modeType);
+        VERIFY_IS_TRUE(pDispatch->_modeEnabled);
 
         pDispatch->ClearState();
     }
 
-    TEST_METHOD(TestSetNumberOfColumns)
+    TEST_METHOD(TestPrivateModes)
     {
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
+        BEGIN_TEST_METHOD_PROPERTIES()
+            TEST_METHOD_PROPERTY(L"Data:modeNumber", L"{1, 3, 5, 6, 7, 12, 25, 40, 1049}")
+        END_TEST_METHOD_PROPERTIES()
 
-        mach.ProcessString(L"\x1b[?3h", 5);
-        VERIFY_ARE_EQUAL(pDispatch->_uiWindowWidth, static_cast<unsigned int>(DispatchTypes::s_sDECCOLMSetColumns));
+        VTInt modeNumber;
+        VERIFY_SUCCEEDED_RETURN(TestData::TryGetValue(L"modeNumber", modeNumber));
+
+        const auto modeType = DispatchTypes::DECPrivateMode(modeNumber);
+        const auto setModeSequence = wil::str_printf<std::wstring>(L"\x1b[?%dh", modeNumber);
+        const auto resetModeSequence = wil::str_printf<std::wstring>(L"\x1b[?%dl", modeNumber);
+
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        mach.ProcessString(setModeSequence);
+        VERIFY_ARE_EQUAL(modeType, pDispatch->_modeType);
+        VERIFY_IS_TRUE(pDispatch->_modeEnabled);
 
         pDispatch->ClearState();
+        pDispatch->_modeEnabled = true;
 
-        mach.ProcessString(L"\x1b[?3l", 5);
-        VERIFY_ARE_EQUAL(pDispatch->_uiWindowWidth, static_cast<unsigned int>(DispatchTypes::s_sDECCOLMResetColumns));
+        mach.ProcessString(resetModeSequence);
+        VERIFY_ARE_EQUAL(modeType, pDispatch->_modeType);
+        VERIFY_IS_FALSE(pDispatch->_modeEnabled);
 
         pDispatch->ClearState();
     }
 
-    TEST_METHOD(TestOriginMode)
+    TEST_METHOD(TestMultipleModes)
     {
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
-        mach.ProcessString(L"\x1b[?6h", 5);
-        VERIFY_IS_TRUE(pDispatch->_fIsOriginModeRelative);
-        VERIFY_IS_TRUE(pDispatch->_fCursorPosition);
-        VERIFY_ARE_EQUAL(pDispatch->_uiLine, 1u);
-        VERIFY_ARE_EQUAL(pDispatch->_uiColumn, 1u);
+        const auto expectedModes = std::vector{ DispatchTypes::DECSCNM_ScreenMode, DispatchTypes::DECCKM_CursorKeysMode, DispatchTypes::DECOM_OriginMode };
 
-        pDispatch->ClearState();
-        pDispatch->_fIsOriginModeRelative = true;
-
-        mach.ProcessString(L"\x1b[?6l", 5);
-        VERIFY_IS_FALSE(pDispatch->_fIsOriginModeRelative);
-        VERIFY_IS_TRUE(pDispatch->_fCursorPosition);
-        VERIFY_ARE_EQUAL(pDispatch->_uiLine, 1u);
-        VERIFY_ARE_EQUAL(pDispatch->_uiColumn, 1u);
+        mach.ProcessString(L"\x1b[?5;1;6h");
+        VERIFY_IS_TRUE(pDispatch->_modeEnabled);
+        VERIFY_ARE_EQUAL(expectedModes, pDispatch->_modeTypes);
 
         pDispatch->ClearState();
-    }
+        pDispatch->_modeEnabled = true;
 
-    TEST_METHOD(TestCursorBlinking)
-    {
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
-
-        mach.ProcessString(L"\x1b[?12h", 6);
-        VERIFY_IS_TRUE(pDispatch->_fCursorBlinking);
-
-        pDispatch->ClearState();
-
-        mach.ProcessString(L"\x1b[?12l", 6);
-        VERIFY_IS_FALSE(pDispatch->_fCursorBlinking);
-
-        pDispatch->ClearState();
-    }
-
-    TEST_METHOD(TestCursorVisibility)
-    {
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
-
-        mach.ProcessString(L"\x1b[?25h", 6);
-        VERIFY_IS_TRUE(pDispatch->_fCursorVisible);
-
-        pDispatch->ClearState();
-
-        mach.ProcessString(L"\x1b[?25l", 6);
-        VERIFY_IS_FALSE(pDispatch->_fCursorVisible);
-
-        pDispatch->ClearState();
-    }
-
-    TEST_METHOD(TestAltBufferSwapping)
-    {
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
-
-        mach.ProcessString(L"\x1b[?1049h", 8);
-        VERIFY_IS_TRUE(pDispatch->_fIsAltBuffer);
-
-        pDispatch->ClearState();
-
-        mach.ProcessString(L"\x1b[?1049h", 8);
-        VERIFY_IS_TRUE(pDispatch->_fIsAltBuffer);
-        mach.ProcessString(L"\x1b[?1049h", 8);
-        VERIFY_IS_TRUE(pDispatch->_fIsAltBuffer);
-
-        pDispatch->ClearState();
-
-        mach.ProcessString(L"\x1b[?1049l", 8);
-        VERIFY_IS_FALSE(pDispatch->_fIsAltBuffer);
-
-        pDispatch->ClearState();
-
-        mach.ProcessString(L"\x1b[?1049h", 8);
-        VERIFY_IS_TRUE(pDispatch->_fIsAltBuffer);
-        mach.ProcessString(L"\x1b[?1049l", 8);
-        VERIFY_IS_FALSE(pDispatch->_fIsAltBuffer);
-
-        pDispatch->ClearState();
-
-        mach.ProcessString(L"\x1b[?1049l", 8);
-        VERIFY_IS_FALSE(pDispatch->_fIsAltBuffer);
-        mach.ProcessString(L"\x1b[?1049l", 8);
-        VERIFY_IS_FALSE(pDispatch->_fIsAltBuffer);
-
-        pDispatch->ClearState();
-    }
-
-    TEST_METHOD(TestEnableDECCOLMSupport)
-    {
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
-
-        mach.ProcessString(L"\x1b[?40h");
-        VERIFY_IS_TRUE(pDispatch->_fIsDECCOLMAllowed);
-
-        pDispatch->ClearState();
-        pDispatch->_fIsDECCOLMAllowed = true;
-
-        mach.ProcessString(L"\x1b[?40l");
-        VERIFY_IS_FALSE(pDispatch->_fIsDECCOLMAllowed);
+        mach.ProcessString(L"\x1b[?5;1;6l");
+        VERIFY_IS_FALSE(pDispatch->_modeEnabled);
+        VERIFY_ARE_EQUAL(expectedModes, pDispatch->_modeTypes);
 
         pDispatch->ClearState();
     }
@@ -1341,27 +1756,28 @@ class StateMachineExternalTest final
             TEST_METHOD_PROPERTY(L"Data:uiDispatchTypes::EraseType", L"{0, 1, 2, 10}") // maps to DispatchTypes::EraseType enum class options.
         END_TEST_METHOD_PROPERTIES()
 
-        unsigned int uiEraseOperation;
+        size_t uiEraseOperation;
         VERIFY_SUCCEEDED_RETURN(TestData::TryGetValue(L"uiEraseOperation", uiEraseOperation));
-        unsigned int uiDispatchTypes;
+        size_t uiDispatchTypes;
         VERIFY_SUCCEEDED_RETURN(TestData::TryGetValue(L"uiDispatchTypes::EraseType", uiDispatchTypes));
 
-        WCHAR wchOp = L'\0';
+        auto wchOp = L'\0';
         bool* pfOperationCallback = nullptr;
 
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         switch (uiEraseOperation)
         {
         case 0:
             wchOp = L'J';
-            pfOperationCallback = &pDispatch->_fEraseDisplay;
+            pfOperationCallback = &pDispatch->_eraseDisplay;
             break;
         case 1:
             wchOp = L'K';
-            pfOperationCallback = &pDispatch->_fEraseLine;
+            pfOperationCallback = &pDispatch->_eraseLine;
             break;
         default:
             VERIFY_FAIL(L"Unknown erase operation permutation.");
@@ -1401,50 +1817,72 @@ class StateMachineExternalTest final
         VERIFY_ARE_EQUAL(expectedDispatchTypes, pDispatch->_eraseType);
     }
 
-    void VerifyDispatchTypes(_In_reads_(cExpectedOptions) const DispatchTypes::GraphicsOptions* const rgExpectedOptions,
-                             const size_t cExpectedOptions,
+    TEST_METHOD(TestMultipleErase)
+    {
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        mach.ProcessString(L"\x1b[3;2J");
+        auto expectedEraseTypes = std::vector{ DispatchTypes::EraseType::Scrollback, DispatchTypes::EraseType::All };
+        VERIFY_IS_TRUE(pDispatch->_eraseDisplay);
+        VERIFY_ARE_EQUAL(expectedEraseTypes, pDispatch->_eraseTypes);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\x1b[0;1K");
+        expectedEraseTypes = std::vector{ DispatchTypes::EraseType::ToEnd, DispatchTypes::EraseType::FromBeginning };
+        VERIFY_IS_TRUE(pDispatch->_eraseLine);
+        VERIFY_ARE_EQUAL(expectedEraseTypes, pDispatch->_eraseTypes);
+
+        pDispatch->ClearState();
+    }
+
+    void VerifyDispatchTypes(const gsl::span<const DispatchTypes::GraphicsOptions> expectedOptions,
                              const StatefulDispatch& dispatch)
     {
-        VERIFY_ARE_EQUAL(cExpectedOptions, dispatch._cOptions);
-        bool fOptionsValid = true;
+        VERIFY_ARE_EQUAL(expectedOptions.size(), dispatch._options.size());
+        auto optionsValid = true;
 
-        for (size_t i = 0; i < dispatch.s_cMaxOptions; i++)
+        for (size_t i = 0; i < dispatch._options.size(); i++)
         {
             auto expectedOption = (DispatchTypes::GraphicsOptions)dispatch.s_uiGraphicsCleared;
 
-            if (i < cExpectedOptions)
+            if (i < expectedOptions.size())
             {
-                expectedOption = rgExpectedOptions[i];
+                expectedOption = til::at(expectedOptions, i);
             }
 
-            fOptionsValid = expectedOption == dispatch._rgOptions[i];
+            optionsValid = expectedOption == til::at(dispatch._options, i);
 
-            if (!fOptionsValid)
+            if (!optionsValid)
             {
-                Log::Comment(NoThrowString().Format(L"Graphics option match failed, index [%zu]. Expected: '%d' Actual: '%d'", i, expectedOption, dispatch._rgOptions[i]));
+                Log::Comment(NoThrowString().Format(L"Graphics option match failed, index [%zu]. Expected: '%d' Actual: '%d'", i, expectedOption, til::at(dispatch._options, i)));
                 break;
             }
         }
 
-        VERIFY_IS_TRUE(fOptionsValid);
+        VERIFY_IS_TRUE(optionsValid);
     }
 
     TEST_METHOD(TestSetGraphicsRendition)
     {
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
-        DispatchTypes::GraphicsOptions rgExpected[16];
+        DispatchTypes::GraphicsOptions rgExpected[17];
 
         Log::Comment(L"Test 1: Check default case.");
         mach.ProcessCharacter(AsciiChars::ESC);
         mach.ProcessCharacter(L'[');
         mach.ProcessCharacter(L'm');
-        VERIFY_IS_TRUE(pDispatch->_fSetGraphics);
+        VERIFY_IS_TRUE(pDispatch->_setGraphics);
 
         rgExpected[0] = DispatchTypes::GraphicsOptions::Off;
-        VerifyDispatchTypes(rgExpected, 1, *pDispatch);
+        VerifyDispatchTypes({ rgExpected, 1 }, *pDispatch);
 
         pDispatch->ClearState();
 
@@ -1454,10 +1892,10 @@ class StateMachineExternalTest final
         mach.ProcessCharacter(L'[');
         mach.ProcessCharacter(L'0');
         mach.ProcessCharacter(L'm');
-        VERIFY_IS_TRUE(pDispatch->_fSetGraphics);
+        VERIFY_IS_TRUE(pDispatch->_setGraphics);
 
         rgExpected[0] = DispatchTypes::GraphicsOptions::Off;
-        VerifyDispatchTypes(rgExpected, 1, *pDispatch);
+        VerifyDispatchTypes({ rgExpected, 1 }, *pDispatch);
 
         pDispatch->ClearState();
 
@@ -1476,19 +1914,23 @@ class StateMachineExternalTest final
         mach.ProcessCharacter(L';');
         mach.ProcessCharacter(L'4');
         mach.ProcessCharacter(L'5');
+        mach.ProcessCharacter(L';');
+        mach.ProcessCharacter(L'5');
+        mach.ProcessCharacter(L'3');
         mach.ProcessCharacter(L'm');
-        VERIFY_IS_TRUE(pDispatch->_fSetGraphics);
+        VERIFY_IS_TRUE(pDispatch->_setGraphics);
 
-        rgExpected[0] = DispatchTypes::GraphicsOptions::BoldBright;
+        rgExpected[0] = DispatchTypes::GraphicsOptions::Intense;
         rgExpected[1] = DispatchTypes::GraphicsOptions::Underline;
         rgExpected[2] = DispatchTypes::GraphicsOptions::Negative;
         rgExpected[3] = DispatchTypes::GraphicsOptions::ForegroundBlack;
         rgExpected[4] = DispatchTypes::GraphicsOptions::BackgroundMagenta;
-        VerifyDispatchTypes(rgExpected, 5, *pDispatch);
+        rgExpected[5] = DispatchTypes::GraphicsOptions::Overline;
+        VerifyDispatchTypes({ rgExpected, 6 }, *pDispatch);
 
         pDispatch->ClearState();
 
-        Log::Comment(L"Test 4: Check 'too many options' (>16) case.");
+        Log::Comment(L"Test 4: Check 'many options' (>16) case.");
 
         mach.ProcessCharacter(AsciiChars::ESC);
         mach.ProcessCharacter(L'[');
@@ -1526,116 +1968,123 @@ class StateMachineExternalTest final
         mach.ProcessCharacter(L';');
         mach.ProcessCharacter(L'1');
         mach.ProcessCharacter(L'm');
-        VERIFY_IS_TRUE(pDispatch->_fSetGraphics);
+        VERIFY_IS_TRUE(pDispatch->_setGraphics);
 
-        rgExpected[0] = DispatchTypes::GraphicsOptions::BoldBright;
+        rgExpected[0] = DispatchTypes::GraphicsOptions::Intense;
         rgExpected[1] = DispatchTypes::GraphicsOptions::Underline;
-        rgExpected[2] = DispatchTypes::GraphicsOptions::BoldBright;
+        rgExpected[2] = DispatchTypes::GraphicsOptions::Intense;
         rgExpected[3] = DispatchTypes::GraphicsOptions::Underline;
-        rgExpected[4] = DispatchTypes::GraphicsOptions::BoldBright;
+        rgExpected[4] = DispatchTypes::GraphicsOptions::Intense;
         rgExpected[5] = DispatchTypes::GraphicsOptions::Underline;
-        rgExpected[6] = DispatchTypes::GraphicsOptions::BoldBright;
+        rgExpected[6] = DispatchTypes::GraphicsOptions::Intense;
         rgExpected[7] = DispatchTypes::GraphicsOptions::Underline;
-        rgExpected[8] = DispatchTypes::GraphicsOptions::BoldBright;
+        rgExpected[8] = DispatchTypes::GraphicsOptions::Intense;
         rgExpected[9] = DispatchTypes::GraphicsOptions::Underline;
-        rgExpected[10] = DispatchTypes::GraphicsOptions::BoldBright;
+        rgExpected[10] = DispatchTypes::GraphicsOptions::Intense;
         rgExpected[11] = DispatchTypes::GraphicsOptions::Underline;
-        rgExpected[12] = DispatchTypes::GraphicsOptions::BoldBright;
+        rgExpected[12] = DispatchTypes::GraphicsOptions::Intense;
         rgExpected[13] = DispatchTypes::GraphicsOptions::Underline;
-        rgExpected[14] = DispatchTypes::GraphicsOptions::BoldBright;
+        rgExpected[14] = DispatchTypes::GraphicsOptions::Intense;
         rgExpected[15] = DispatchTypes::GraphicsOptions::Underline;
-        VerifyDispatchTypes(rgExpected, 16, *pDispatch);
+        rgExpected[16] = DispatchTypes::GraphicsOptions::Intense;
+        VerifyDispatchTypes({ rgExpected, 17 }, *pDispatch);
 
         pDispatch->ClearState();
 
         Log::Comment(L"Test 5.a: Test an empty param at the end of a sequence");
 
         std::wstring sequence = L"\x1b[1;m";
-        mach.ProcessString(&sequence[0], sequence.length());
-        VERIFY_IS_TRUE(pDispatch->_fSetGraphics);
+        mach.ProcessString(sequence);
+        VERIFY_IS_TRUE(pDispatch->_setGraphics);
 
-        rgExpected[0] = DispatchTypes::GraphicsOptions::BoldBright;
+        rgExpected[0] = DispatchTypes::GraphicsOptions::Intense;
         rgExpected[1] = DispatchTypes::GraphicsOptions::Off;
-        VerifyDispatchTypes(rgExpected, 2, *pDispatch);
+        VerifyDispatchTypes({ rgExpected, 2 }, *pDispatch);
 
         pDispatch->ClearState();
 
         Log::Comment(L"Test 5.b: Test an empty param in the middle of a sequence");
 
         sequence = L"\x1b[1;;1m";
-        mach.ProcessString(&sequence[0], sequence.length());
-        VERIFY_IS_TRUE(pDispatch->_fSetGraphics);
+        mach.ProcessString(sequence);
+        VERIFY_IS_TRUE(pDispatch->_setGraphics);
 
-        rgExpected[0] = DispatchTypes::GraphicsOptions::BoldBright;
+        rgExpected[0] = DispatchTypes::GraphicsOptions::Intense;
         rgExpected[1] = DispatchTypes::GraphicsOptions::Off;
-        rgExpected[2] = DispatchTypes::GraphicsOptions::BoldBright;
-        VerifyDispatchTypes(rgExpected, 3, *pDispatch);
+        rgExpected[2] = DispatchTypes::GraphicsOptions::Intense;
+        VerifyDispatchTypes({ rgExpected, 3 }, *pDispatch);
 
         pDispatch->ClearState();
 
         Log::Comment(L"Test 5.c: Test an empty param at the start of a sequence");
 
         sequence = L"\x1b[;31;1m";
-        mach.ProcessString(&sequence[0], sequence.length());
-        VERIFY_IS_TRUE(pDispatch->_fSetGraphics);
+        mach.ProcessString(sequence);
+        VERIFY_IS_TRUE(pDispatch->_setGraphics);
 
         rgExpected[0] = DispatchTypes::GraphicsOptions::Off;
         rgExpected[1] = DispatchTypes::GraphicsOptions::ForegroundRed;
-        rgExpected[2] = DispatchTypes::GraphicsOptions::BoldBright;
-        VerifyDispatchTypes(rgExpected, 3, *pDispatch);
+        rgExpected[2] = DispatchTypes::GraphicsOptions::Intense;
+        VerifyDispatchTypes({ rgExpected, 3 }, *pDispatch);
 
         pDispatch->ClearState();
     }
 
     TEST_METHOD(TestDeviceStatusReport)
     {
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
-        Log::Comment(L"Test 1: Check empty case. Should fail.");
+        Log::Comment(L"Test 1: Check OS (operating status) case 5. Should succeed.");
         mach.ProcessCharacter(AsciiChars::ESC);
         mach.ProcessCharacter(L'[');
+        mach.ProcessCharacter(L'5');
         mach.ProcessCharacter(L'n');
 
-        VERIFY_IS_FALSE(pDispatch->_fDeviceStatusReport);
+        VERIFY_IS_TRUE(pDispatch->_deviceStatusReport);
+        VERIFY_ARE_EQUAL(DispatchTypes::StatusType::OS_OperatingStatus, pDispatch->_statusReportType);
 
         pDispatch->ClearState();
 
-        Log::Comment(L"Test 2: Check CSR (cursor position command) case 6. Should succeed.");
+        Log::Comment(L"Test 2: Check CPR (cursor position report) case 6. Should succeed.");
         mach.ProcessCharacter(AsciiChars::ESC);
         mach.ProcessCharacter(L'[');
         mach.ProcessCharacter(L'6');
         mach.ProcessCharacter(L'n');
 
-        VERIFY_IS_TRUE(pDispatch->_fDeviceStatusReport);
-        VERIFY_ARE_EQUAL(DispatchTypes::AnsiStatusType::CPR_CursorPositionReport, pDispatch->_statusReportType);
+        VERIFY_IS_TRUE(pDispatch->_deviceStatusReport);
+        VERIFY_ARE_EQUAL(DispatchTypes::StatusType::CPR_CursorPositionReport, pDispatch->_statusReportType);
 
         pDispatch->ClearState();
 
-        Log::Comment(L"Test 3: Check unimplemented case 1. Should fail.");
+        Log::Comment(L"Test 3: Check DECXCPR (extended cursor position report) case ?6. Should succeed.");
         mach.ProcessCharacter(AsciiChars::ESC);
         mach.ProcessCharacter(L'[');
-        mach.ProcessCharacter(L'1');
+        mach.ProcessCharacter(L'?');
+        mach.ProcessCharacter(L'6');
         mach.ProcessCharacter(L'n');
 
-        VERIFY_IS_FALSE(pDispatch->_fDeviceStatusReport);
+        VERIFY_IS_TRUE(pDispatch->_deviceStatusReport);
+        VERIFY_ARE_EQUAL(DispatchTypes::StatusType::ExCPR_ExtendedCursorPositionReport, pDispatch->_statusReportType);
 
         pDispatch->ClearState();
     }
 
     TEST_METHOD(TestDeviceAttributes)
     {
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         Log::Comment(L"Test 1: Check default case, no params.");
         mach.ProcessCharacter(AsciiChars::ESC);
         mach.ProcessCharacter(L'[');
         mach.ProcessCharacter(L'c');
 
-        VERIFY_IS_TRUE(pDispatch->_fDeviceAttributes);
+        VERIFY_IS_TRUE(pDispatch->_deviceAttributes);
 
         pDispatch->ClearState();
 
@@ -1645,7 +2094,7 @@ class StateMachineExternalTest final
         mach.ProcessCharacter(L'0');
         mach.ProcessCharacter(L'c');
 
-        VERIFY_IS_TRUE(pDispatch->_fDeviceAttributes);
+        VERIFY_IS_TRUE(pDispatch->_deviceAttributes);
 
         pDispatch->ClearState();
 
@@ -1655,25 +2104,144 @@ class StateMachineExternalTest final
         mach.ProcessCharacter(L'1');
         mach.ProcessCharacter(L'c');
 
-        VERIFY_IS_FALSE(pDispatch->_fDeviceAttributes);
+        VERIFY_IS_FALSE(pDispatch->_deviceAttributes);
+
+        pDispatch->ClearState();
+    }
+
+    TEST_METHOD(TestSecondaryDeviceAttributes)
+    {
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        Log::Comment(L"Test 1: Check default case, no params.");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'[');
+        mach.ProcessCharacter(L'>');
+        mach.ProcessCharacter(L'c');
+
+        VERIFY_IS_TRUE(pDispatch->_secondaryDeviceAttributes);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"Test 2: Check default case, 0 param.");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'[');
+        mach.ProcessCharacter(L'>');
+        mach.ProcessCharacter(L'0');
+        mach.ProcessCharacter(L'c');
+
+        VERIFY_IS_TRUE(pDispatch->_secondaryDeviceAttributes);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"Test 3: Check fail case, 1 (or any other) param.");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'[');
+        mach.ProcessCharacter(L'>');
+        mach.ProcessCharacter(L'1');
+        mach.ProcessCharacter(L'c');
+
+        VERIFY_IS_FALSE(pDispatch->_secondaryDeviceAttributes);
+
+        pDispatch->ClearState();
+    }
+
+    TEST_METHOD(TestTertiaryDeviceAttributes)
+    {
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        Log::Comment(L"Test 1: Check default case, no params.");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'[');
+        mach.ProcessCharacter(L'=');
+        mach.ProcessCharacter(L'c');
+
+        VERIFY_IS_TRUE(pDispatch->_tertiaryDeviceAttributes);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"Test 2: Check default case, 0 param.");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'[');
+        mach.ProcessCharacter(L'=');
+        mach.ProcessCharacter(L'0');
+        mach.ProcessCharacter(L'c');
+
+        VERIFY_IS_TRUE(pDispatch->_tertiaryDeviceAttributes);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"Test 3: Check fail case, 1 (or any other) param.");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'[');
+        mach.ProcessCharacter(L'=');
+        mach.ProcessCharacter(L'1');
+        mach.ProcessCharacter(L'c');
+
+        VERIFY_IS_FALSE(pDispatch->_tertiaryDeviceAttributes);
+
+        pDispatch->ClearState();
+    }
+
+    TEST_METHOD(TestRequestTerminalParameters)
+    {
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        Log::Comment(L"Test 1: Check default case, no params.");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'[');
+        mach.ProcessCharacter(L'x');
+
+        VERIFY_IS_TRUE(pDispatch->_requestTerminalParameters);
+        VERIFY_ARE_EQUAL(DispatchTypes::ReportingPermission::Unsolicited, pDispatch->_reportingPermission);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"Test 2: Check unsolicited permission, 0 param.");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'[');
+        mach.ProcessCharacter(L'0');
+        mach.ProcessCharacter(L'x');
+
+        VERIFY_IS_TRUE(pDispatch->_requestTerminalParameters);
+        VERIFY_ARE_EQUAL(DispatchTypes::ReportingPermission::Unsolicited, pDispatch->_reportingPermission);
+
+        Log::Comment(L"Test 3: Check solicited permission, 1 param.");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'[');
+        mach.ProcessCharacter(L'1');
+        mach.ProcessCharacter(L'x');
+
+        VERIFY_IS_TRUE(pDispatch->_requestTerminalParameters);
+        VERIFY_ARE_EQUAL(DispatchTypes::ReportingPermission::Solicited, pDispatch->_reportingPermission);
 
         pDispatch->ClearState();
     }
 
     TEST_METHOD(TestStrings)
     {
-        StatefulDispatch* pDispatch = new StatefulDispatch;
-        VERIFY_IS_NOT_NULL(pDispatch);
-        StateMachine mach(new OutputStateMachineEngine(pDispatch));
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
 
         DispatchTypes::GraphicsOptions rgExpected[16];
         DispatchTypes::EraseType expectedDispatchTypes;
         ///////////////////////////////////////////////////////////////////////
 
         Log::Comment(L"Test 1: Basic String processing. One sequence in a string.");
-        mach.ProcessString(L"\x1b[0m", 4);
+        mach.ProcessString(L"\x1b[0m");
 
-        VERIFY_IS_TRUE(pDispatch->_fSetGraphics);
+        VERIFY_IS_TRUE(pDispatch->_setGraphics);
 
         pDispatch->ClearState();
 
@@ -1681,54 +2249,55 @@ class StateMachineExternalTest final
 
         Log::Comment(L"Test 2: A couple of sequences all in one string");
 
-        mach.ProcessString(L"\x1b[1;4;7;30;45m\x1b[2J", 18);
-        VERIFY_IS_TRUE(pDispatch->_fSetGraphics);
-        VERIFY_IS_TRUE(pDispatch->_fEraseDisplay);
+        mach.ProcessString(L"\x1b[1;4;7;30;45;53m\x1b[2J");
+        VERIFY_IS_TRUE(pDispatch->_setGraphics);
+        VERIFY_IS_TRUE(pDispatch->_eraseDisplay);
 
-        rgExpected[0] = DispatchTypes::GraphicsOptions::BoldBright;
+        rgExpected[0] = DispatchTypes::GraphicsOptions::Intense;
         rgExpected[1] = DispatchTypes::GraphicsOptions::Underline;
         rgExpected[2] = DispatchTypes::GraphicsOptions::Negative;
         rgExpected[3] = DispatchTypes::GraphicsOptions::ForegroundBlack;
         rgExpected[4] = DispatchTypes::GraphicsOptions::BackgroundMagenta;
+        rgExpected[5] = DispatchTypes::GraphicsOptions::Overline;
         expectedDispatchTypes = DispatchTypes::EraseType::All;
-        VerifyDispatchTypes(rgExpected, 5, *pDispatch);
+        VerifyDispatchTypes({ rgExpected, 6 }, *pDispatch);
         VERIFY_ARE_EQUAL(expectedDispatchTypes, pDispatch->_eraseType);
 
         pDispatch->ClearState();
 
         ///////////////////////////////////////////////////////////////////////
-        Log::Comment(L"Test 3: Two sequences seperated by a non-sequence of characters");
+        Log::Comment(L"Test 3: Two sequences separated by a non-sequence of characters");
 
-        mach.ProcessString(L"\x1b[1;30mHello World\x1b[2J", 22);
+        mach.ProcessString(L"\x1b[1;30mHello World\x1b[2J");
 
-        rgExpected[0] = DispatchTypes::GraphicsOptions::BoldBright;
+        rgExpected[0] = DispatchTypes::GraphicsOptions::Intense;
         rgExpected[1] = DispatchTypes::GraphicsOptions::ForegroundBlack;
         expectedDispatchTypes = DispatchTypes::EraseType::All;
 
-        VERIFY_IS_TRUE(pDispatch->_fSetGraphics);
-        VERIFY_IS_TRUE(pDispatch->_fEraseDisplay);
+        VERIFY_IS_TRUE(pDispatch->_setGraphics);
+        VERIFY_IS_TRUE(pDispatch->_eraseDisplay);
 
-        VerifyDispatchTypes(rgExpected, 2, *pDispatch);
+        VerifyDispatchTypes({ rgExpected, 2 }, *pDispatch);
         VERIFY_ARE_EQUAL(expectedDispatchTypes, pDispatch->_eraseType);
 
         pDispatch->ClearState();
 
         ///////////////////////////////////////////////////////////////////////
         Log::Comment(L"Test 4: An entire sequence broke into multiple strings");
-        mach.ProcessString(L"\x1b[1;", 4);
-        VERIFY_IS_FALSE(pDispatch->_fSetGraphics);
-        VERIFY_IS_FALSE(pDispatch->_fEraseDisplay);
+        mach.ProcessString(L"\x1b[1;");
+        VERIFY_IS_FALSE(pDispatch->_setGraphics);
+        VERIFY_IS_FALSE(pDispatch->_eraseDisplay);
 
-        mach.ProcessString(L"30mHello World\x1b[2J", 18);
+        mach.ProcessString(L"30mHello World\x1b[2J");
 
-        rgExpected[0] = DispatchTypes::GraphicsOptions::BoldBright;
+        rgExpected[0] = DispatchTypes::GraphicsOptions::Intense;
         rgExpected[1] = DispatchTypes::GraphicsOptions::ForegroundBlack;
         expectedDispatchTypes = DispatchTypes::EraseType::All;
 
-        VERIFY_IS_TRUE(pDispatch->_fSetGraphics);
-        VERIFY_IS_TRUE(pDispatch->_fEraseDisplay);
+        VERIFY_IS_TRUE(pDispatch->_setGraphics);
+        VERIFY_IS_TRUE(pDispatch->_eraseDisplay);
 
-        VerifyDispatchTypes(rgExpected, 2, *pDispatch);
+        VerifyDispatchTypes({ rgExpected, 2 }, *pDispatch);
         VERIFY_ARE_EQUAL(expectedDispatchTypes, pDispatch->_eraseType);
 
         pDispatch->ClearState();
@@ -1736,34 +2305,844 @@ class StateMachineExternalTest final
         ///////////////////////////////////////////////////////////////////////
         Log::Comment(L"Test 5: A sequence with mixed ProcessCharacter and ProcessString calls");
 
-        rgExpected[0] = DispatchTypes::GraphicsOptions::BoldBright;
+        rgExpected[0] = DispatchTypes::GraphicsOptions::Intense;
         rgExpected[1] = DispatchTypes::GraphicsOptions::ForegroundBlack;
 
-        mach.ProcessString(L"\x1b[1;", 4);
-        VERIFY_IS_FALSE(pDispatch->_fSetGraphics);
-        VERIFY_IS_FALSE(pDispatch->_fEraseDisplay);
+        mach.ProcessString(L"\x1b[1;");
+        VERIFY_IS_FALSE(pDispatch->_setGraphics);
+        VERIFY_IS_FALSE(pDispatch->_eraseDisplay);
 
         mach.ProcessCharacter(L'3');
-        VERIFY_IS_FALSE(pDispatch->_fSetGraphics);
-        VERIFY_IS_FALSE(pDispatch->_fEraseDisplay);
+        VERIFY_IS_FALSE(pDispatch->_setGraphics);
+        VERIFY_IS_FALSE(pDispatch->_eraseDisplay);
 
         mach.ProcessCharacter(L'0');
-        VERIFY_IS_FALSE(pDispatch->_fSetGraphics);
-        VERIFY_IS_FALSE(pDispatch->_fEraseDisplay);
+        VERIFY_IS_FALSE(pDispatch->_setGraphics);
+        VERIFY_IS_FALSE(pDispatch->_eraseDisplay);
 
         mach.ProcessCharacter(L'm');
 
-        VERIFY_IS_TRUE(pDispatch->_fSetGraphics);
-        VERIFY_IS_FALSE(pDispatch->_fEraseDisplay);
-        VerifyDispatchTypes(rgExpected, 2, *pDispatch);
+        VERIFY_IS_TRUE(pDispatch->_setGraphics);
+        VERIFY_IS_FALSE(pDispatch->_eraseDisplay);
+        VerifyDispatchTypes({ rgExpected, 2 }, *pDispatch);
 
-        mach.ProcessString(L"Hello World\x1b[2J", 15);
+        mach.ProcessString(L"Hello World\x1b[2J");
 
         expectedDispatchTypes = DispatchTypes::EraseType::All;
 
-        VERIFY_IS_TRUE(pDispatch->_fEraseDisplay);
+        VERIFY_IS_TRUE(pDispatch->_eraseDisplay);
 
         VERIFY_ARE_EQUAL(expectedDispatchTypes, pDispatch->_eraseType);
+
+        pDispatch->ClearState();
+    }
+
+    TEST_METHOD(TestLineFeed)
+    {
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        Log::Comment(L"IND (Index) escape sequence");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'D');
+
+        VERIFY_IS_TRUE(pDispatch->_lineFeed);
+        VERIFY_ARE_EQUAL(DispatchTypes::LineFeedType::WithoutReturn, pDispatch->_lineFeedType);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"NEL (Next Line) escape sequence");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'E');
+
+        VERIFY_IS_TRUE(pDispatch->_lineFeed);
+        VERIFY_ARE_EQUAL(DispatchTypes::LineFeedType::WithReturn, pDispatch->_lineFeedType);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"LF (Line Feed) control code");
+        mach.ProcessCharacter(AsciiChars::LF);
+
+        VERIFY_IS_TRUE(pDispatch->_lineFeed);
+        VERIFY_ARE_EQUAL(DispatchTypes::LineFeedType::DependsOnMode, pDispatch->_lineFeedType);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"FF (Form Feed) control code");
+        mach.ProcessCharacter(AsciiChars::FF);
+
+        VERIFY_IS_TRUE(pDispatch->_lineFeed);
+        VERIFY_ARE_EQUAL(DispatchTypes::LineFeedType::DependsOnMode, pDispatch->_lineFeedType);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"VT (Vertical Tab) control code");
+        mach.ProcessCharacter(AsciiChars::VT);
+
+        VERIFY_IS_TRUE(pDispatch->_lineFeed);
+        VERIFY_ARE_EQUAL(DispatchTypes::LineFeedType::DependsOnMode, pDispatch->_lineFeedType);
+
+        pDispatch->ClearState();
+    }
+
+    TEST_METHOD(TestControlCharacters)
+    {
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        Log::Comment(L"BEL (Warning Bell) control character");
+        mach.ProcessCharacter(AsciiChars::BEL);
+
+        VERIFY_IS_TRUE(pDispatch->_warningBell);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"BS (Back Space) control character");
+        mach.ProcessCharacter(AsciiChars::BS);
+
+        VERIFY_IS_TRUE(pDispatch->_cursorBackward);
+        VERIFY_ARE_EQUAL(1u, pDispatch->_cursorDistance);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"CR (Carriage Return) control character");
+        mach.ProcessCharacter(AsciiChars::CR);
+
+        VERIFY_IS_TRUE(pDispatch->_carriageReturn);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"HT (Horizontal Tab) control character");
+        mach.ProcessCharacter(AsciiChars::TAB);
+
+        VERIFY_IS_TRUE(pDispatch->_forwardTab);
+        VERIFY_ARE_EQUAL(1u, pDispatch->_numTabs);
+
+        pDispatch->ClearState();
+    }
+
+    TEST_METHOD(TestTabClear)
+    {
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        mach.ProcessString(L"\x1b[g");
+        auto expectedClearTypes = std::vector{ DispatchTypes::TabClearType::ClearCurrentColumn };
+        VERIFY_IS_TRUE(pDispatch->_tabClear);
+        VERIFY_ARE_EQUAL(expectedClearTypes, pDispatch->_tabClearTypes);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\x1b[3g");
+        expectedClearTypes = std::vector{ DispatchTypes::TabClearType::ClearAllColumns };
+        VERIFY_IS_TRUE(pDispatch->_tabClear);
+        VERIFY_ARE_EQUAL(expectedClearTypes, pDispatch->_tabClearTypes);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\x1b[0;3g");
+        expectedClearTypes = std::vector{ DispatchTypes::TabClearType::ClearCurrentColumn, DispatchTypes::TabClearType::ClearAllColumns };
+        VERIFY_IS_TRUE(pDispatch->_tabClear);
+        VERIFY_ARE_EQUAL(expectedClearTypes, pDispatch->_tabClearTypes);
+
+        pDispatch->ClearState();
+    }
+
+    TEST_METHOD(TestVt52Sequences)
+    {
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        // ANSI mode must be reset for VT52 sequences to be recognized.
+        mach.SetParserMode(StateMachine::Mode::Ansi, false);
+
+        Log::Comment(L"Cursor Up");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'A');
+        VERIFY_IS_TRUE(pDispatch->_cursorUp);
+        VERIFY_ARE_EQUAL(1u, pDispatch->_cursorDistance);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"Cursor Down");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'B');
+        VERIFY_IS_TRUE(pDispatch->_cursorDown);
+        VERIFY_ARE_EQUAL(1u, pDispatch->_cursorDistance);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"Cursor Right");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'C');
+        VERIFY_IS_TRUE(pDispatch->_cursorForward);
+        VERIFY_ARE_EQUAL(1u, pDispatch->_cursorDistance);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"Cursor Left");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'D');
+        VERIFY_IS_TRUE(pDispatch->_cursorBackward);
+        VERIFY_ARE_EQUAL(1u, pDispatch->_cursorDistance);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"Cursor to Home");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'H');
+        VERIFY_IS_TRUE(pDispatch->_cursorPosition);
+        VERIFY_ARE_EQUAL(1u, pDispatch->_line);
+        VERIFY_ARE_EQUAL(1u, pDispatch->_column);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"Reverse Line Feed");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'I');
+        VERIFY_IS_TRUE(pDispatch->_reverseLineFeed);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"Erase to End of Screen");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'J');
+        VERIFY_IS_TRUE(pDispatch->_eraseDisplay);
+        VERIFY_ARE_EQUAL(DispatchTypes::EraseType::ToEnd, pDispatch->_eraseType);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"Erase to End of Line");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'K');
+        VERIFY_IS_TRUE(pDispatch->_eraseLine);
+        VERIFY_ARE_EQUAL(DispatchTypes::EraseType::ToEnd, pDispatch->_eraseType);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"Direct Cursor Address");
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'Y');
+        mach.ProcessCharacter(L' ' + 3); // Coordinates must be printable ASCII values,
+        mach.ProcessCharacter(L' ' + 5); // so are relative to 0x20 (the space character).
+        VERIFY_IS_TRUE(pDispatch->_cursorPosition);
+        VERIFY_ARE_EQUAL(3u, pDispatch->_line - 1); // CursorPosition coordinates are 1-based,
+        VERIFY_ARE_EQUAL(5u, pDispatch->_column - 1); // so are 1 more than the expected values.
+
+        pDispatch->ClearState();
+    }
+
+    TEST_METHOD(TestIdentifyDeviceReport)
+    {
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        Log::Comment(L"Identify Device in VT52 mode.");
+        mach.SetParserMode(StateMachine::Mode::Ansi, false);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'Z');
+        VERIFY_IS_TRUE(pDispatch->_vt52DeviceAttributes);
+        VERIFY_IS_FALSE(pDispatch->_deviceAttributes);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"Identify Device in ANSI mode.");
+        mach.SetParserMode(StateMachine::Mode::Ansi, true);
+        mach.ProcessCharacter(AsciiChars::ESC);
+        mach.ProcessCharacter(L'Z');
+        VERIFY_IS_TRUE(pDispatch->_deviceAttributes);
+        VERIFY_IS_FALSE(pDispatch->_vt52DeviceAttributes);
+
+        pDispatch->ClearState();
+    }
+
+    TEST_METHOD(TestOscSetDefaultForeground)
+    {
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        // Single param
+        mach.ProcessString(L"\033]10;rgb:1/1/1\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultForeground);
+        VERIFY_ARE_EQUAL(RGB(0x11, 0x11, 0x11), pDispatch->_defaultForegroundColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]10;rgb:12/34/56\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultForeground);
+        VERIFY_ARE_EQUAL(RGB(0x12, 0x34, 0x56), pDispatch->_defaultForegroundColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]10;#111\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultForeground);
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_defaultForegroundColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]10;#123456\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultForeground);
+        VERIFY_ARE_EQUAL(RGB(0x12, 0x34, 0x56), pDispatch->_defaultForegroundColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]10;DarkOrange\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultForeground);
+        VERIFY_ARE_EQUAL(RGB(255, 140, 0), pDispatch->_defaultForegroundColor);
+
+        pDispatch->ClearState();
+
+        // Multiple params
+        mach.ProcessString(L"\033]10;#111;rgb:2/2/2\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultForeground);
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_defaultForegroundColor);
+        VERIFY_IS_TRUE(pDispatch->_setDefaultBackground);
+        VERIFY_ARE_EQUAL(RGB(0x22, 0x22, 0x22), pDispatch->_defaultBackgroundColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]10;#111;DarkOrange\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultForeground);
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_defaultForegroundColor);
+        VERIFY_IS_TRUE(pDispatch->_setDefaultBackground);
+        VERIFY_ARE_EQUAL(RGB(255, 140, 0), pDispatch->_defaultBackgroundColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]10;#111;DarkOrange;rgb:2/2/2\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultForeground);
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_defaultForegroundColor);
+        VERIFY_IS_TRUE(pDispatch->_setDefaultBackground);
+        VERIFY_ARE_EQUAL(RGB(255, 140, 0), pDispatch->_defaultBackgroundColor);
+        VERIFY_IS_TRUE(pDispatch->_setDefaultCursorColor);
+        VERIFY_ARE_EQUAL(RGB(0x22, 0x22, 0x22), pDispatch->_defaultCursorColor);
+
+        pDispatch->ClearState();
+
+        // Partially valid multi-param sequences.
+        mach.ProcessString(L"\033]10;#111;\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultForeground);
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_defaultForegroundColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]10;#111;rgb:\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultForeground);
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_defaultForegroundColor);
+        VERIFY_IS_FALSE(pDispatch->_setDefaultBackground);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]10;#111;#2\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultForeground);
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_defaultForegroundColor);
+        VERIFY_IS_FALSE(pDispatch->_setDefaultBackground);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]10;;rgb:1/1/1\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setDefaultForeground);
+        VERIFY_IS_TRUE(pDispatch->_setDefaultBackground);
+        VERIFY_ARE_EQUAL(RGB(0x11, 0x11, 0x11), pDispatch->_defaultBackgroundColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]10;#1;rgb:1/1/1\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setDefaultForeground);
+        VERIFY_IS_TRUE(pDispatch->_setDefaultBackground);
+        VERIFY_ARE_EQUAL(RGB(0x11, 0x11, 0x11), pDispatch->_defaultBackgroundColor);
+
+        pDispatch->ClearState();
+
+        // Invalid sequences.
+        mach.ProcessString(L"\033]10;rgb:1/1/\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setDefaultForeground);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]10;#1\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setDefaultForeground);
+
+        pDispatch->ClearState();
+    }
+
+    TEST_METHOD(TestOscSetDefaultBackground)
+    {
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        mach.ProcessString(L"\033]11;rgb:1/1/1\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultBackground);
+        VERIFY_ARE_EQUAL(RGB(0x11, 0x11, 0x11), pDispatch->_defaultBackgroundColor);
+
+        pDispatch->ClearState();
+
+        // Single param
+        mach.ProcessString(L"\033]11;rgb:12/34/56\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultBackground);
+        VERIFY_ARE_EQUAL(RGB(0x12, 0x34, 0x56), pDispatch->_defaultBackgroundColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]11;#111\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultBackground);
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_defaultBackgroundColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]11;#123456\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultBackground);
+        VERIFY_ARE_EQUAL(RGB(0x12, 0x34, 0x56), pDispatch->_defaultBackgroundColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]11;DarkOrange\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultBackground);
+        VERIFY_ARE_EQUAL(RGB(255, 140, 0), pDispatch->_defaultBackgroundColor);
+
+        pDispatch->ClearState();
+
+        // Multiple params
+        mach.ProcessString(L"\033]11;#111;rgb:2/2/2\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultBackground);
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_defaultBackgroundColor);
+        VERIFY_ARE_EQUAL(RGB(0x22, 0x22, 0x22), pDispatch->_defaultCursorColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]11;#111;DarkOrange\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultBackground);
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_defaultBackgroundColor);
+        VERIFY_ARE_EQUAL(RGB(255, 140, 0), pDispatch->_defaultCursorColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]11;#111;DarkOrange;rgb:2/2/2\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultBackground);
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_defaultBackgroundColor);
+        VERIFY_ARE_EQUAL(RGB(255, 140, 0), pDispatch->_defaultCursorColor);
+        // The third param is out of range.
+
+        pDispatch->ClearState();
+
+        // Partially valid multi-param sequences.
+        mach.ProcessString(L"\033]11;#111;\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultBackground);
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_defaultBackgroundColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]11;#111;rgb:\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultBackground);
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_defaultBackgroundColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]11;#111;#2\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setDefaultBackground);
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_defaultBackgroundColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]11;;rgb:1/1/1\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setDefaultBackground);
+        VERIFY_IS_TRUE(pDispatch->_setDefaultCursorColor);
+        VERIFY_ARE_EQUAL(RGB(0x11, 0x11, 0x11), pDispatch->_defaultCursorColor);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]11;#1;rgb:1/1/1\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setDefaultBackground);
+        VERIFY_IS_TRUE(pDispatch->_setDefaultCursorColor);
+        VERIFY_ARE_EQUAL(RGB(0x11, 0x11, 0x11), pDispatch->_defaultCursorColor);
+
+        pDispatch->ClearState();
+
+        // Invalid sequences.
+        mach.ProcessString(L"\033]11;rgb:1/1/\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setDefaultBackground);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]11;#1\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setDefaultBackground);
+
+        pDispatch->ClearState();
+    }
+
+    TEST_METHOD(TestOscSetColorTableEntry)
+    {
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        mach.ProcessString(L"\033]4;0;rgb:1/1/1\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setColorTableEntry);
+        VERIFY_ARE_EQUAL(RGB(0x11, 0x11, 0x11), pDispatch->_colorTable.at(0));
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]4;16;rgb:11/11/11\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setColorTableEntry);
+        VERIFY_ARE_EQUAL(RGB(0x11, 0x11, 0x11), pDispatch->_colorTable.at(16));
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]4;64;#111\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setColorTableEntry);
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_colorTable.at(64));
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]4;128;orange\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setColorTableEntry);
+        VERIFY_ARE_EQUAL(RGB(255, 165, 0), pDispatch->_colorTable.at(128));
+
+        pDispatch->ClearState();
+
+        // Invalid sequences.
+        mach.ProcessString(L"\033]4;\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setColorTableEntry);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]4;;\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setColorTableEntry);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]4;0\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setColorTableEntry);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]4;111\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setColorTableEntry);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]4;#111\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setColorTableEntry);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]4;1;111\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setColorTableEntry);
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]4;1;rgb:\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setColorTableEntry);
+
+        pDispatch->ClearState();
+
+        // Multiple params.
+        mach.ProcessString(L"\033]4;0;rgb:1/1/1;16;rgb:2/2/2\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setColorTableEntry);
+        VERIFY_ARE_EQUAL(RGB(0x11, 0x11, 0x11), pDispatch->_colorTable.at(0));
+        VERIFY_ARE_EQUAL(RGB(0x22, 0x22, 0x22), pDispatch->_colorTable.at(16));
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]4;0;rgb:1/1/1;16;rgb:2/2/2;64;#111\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setColorTableEntry);
+        VERIFY_ARE_EQUAL(RGB(0x11, 0x11, 0x11), pDispatch->_colorTable.at(0));
+        VERIFY_ARE_EQUAL(RGB(0x22, 0x22, 0x22), pDispatch->_colorTable.at(16));
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_colorTable.at(64));
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]4;0;rgb:1/1/1;16;rgb:2/2/2;64;#111;128;orange\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setColorTableEntry);
+        VERIFY_ARE_EQUAL(RGB(0x11, 0x11, 0x11), pDispatch->_colorTable.at(0));
+        VERIFY_ARE_EQUAL(RGB(0x22, 0x22, 0x22), pDispatch->_colorTable.at(16));
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_colorTable.at(64));
+        VERIFY_ARE_EQUAL(RGB(255, 165, 0), pDispatch->_colorTable.at(128));
+
+        pDispatch->ClearState();
+
+        // Partially valid sequences. Valid colors should not be affected by invalid colors.
+        mach.ProcessString(L"\033]4;0;rgb:11;1;rgb:2/2/2;2;#111;3;orange;4;#111\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setColorTableEntry);
+        VERIFY_ARE_EQUAL(RGB(0, 0, 0), pDispatch->_colorTable.at(0));
+        VERIFY_ARE_EQUAL(RGB(0x22, 0x22, 0x22), pDispatch->_colorTable.at(1));
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_colorTable.at(2));
+        VERIFY_ARE_EQUAL(RGB(255, 165, 0), pDispatch->_colorTable.at(3));
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_colorTable.at(4));
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]4;0;rgb:1/1/1;1;rgb:2/2/2;2;#111;3;orange;4;111\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setColorTableEntry);
+        VERIFY_ARE_EQUAL(RGB(0x11, 0x11, 0x11), pDispatch->_colorTable.at(0));
+        VERIFY_ARE_EQUAL(RGB(0x22, 0x22, 0x22), pDispatch->_colorTable.at(1));
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_colorTable.at(2));
+        VERIFY_ARE_EQUAL(RGB(255, 165, 0), pDispatch->_colorTable.at(3));
+        VERIFY_ARE_EQUAL(RGB(0, 0, 0), pDispatch->_colorTable.at(4));
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]4;0;rgb:1/1/1;1;rgb:2;2;#111;3;orange;4;#222\033\\");
+        VERIFY_IS_TRUE(pDispatch->_setColorTableEntry);
+        VERIFY_ARE_EQUAL(RGB(0x11, 0x11, 0x11), pDispatch->_colorTable.at(0));
+        VERIFY_ARE_EQUAL(RGB(0, 0, 0), pDispatch->_colorTable.at(1));
+        VERIFY_ARE_EQUAL(RGB(0x10, 0x10, 0x10), pDispatch->_colorTable.at(2));
+        VERIFY_ARE_EQUAL(RGB(255, 165, 0), pDispatch->_colorTable.at(3));
+        VERIFY_ARE_EQUAL(RGB(0x20, 0x20, 0x20), pDispatch->_colorTable.at(4));
+
+        pDispatch->ClearState();
+
+        // Invalid multi-param sequences
+        mach.ProcessString(L"\033]4;0;;1;;\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setColorTableEntry);
+        VERIFY_ARE_EQUAL(RGB(0, 0, 0), pDispatch->_colorTable.at(0));
+        VERIFY_ARE_EQUAL(RGB(0, 0, 0), pDispatch->_colorTable.at(1));
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]4;0;;;;;1;;;;;\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setColorTableEntry);
+        VERIFY_ARE_EQUAL(RGB(0, 0, 0), pDispatch->_colorTable.at(0));
+        VERIFY_ARE_EQUAL(RGB(0, 0, 0), pDispatch->_colorTable.at(1));
+
+        pDispatch->ClearState();
+
+        mach.ProcessString(L"\033]4;0;rgb:1/1/;16;rgb:2/2/;64;#11\033\\");
+        VERIFY_IS_FALSE(pDispatch->_setColorTableEntry);
+        VERIFY_ARE_EQUAL(RGB(0, 0, 0), pDispatch->_colorTable.at(0));
+        VERIFY_ARE_EQUAL(RGB(0, 0, 0), pDispatch->_colorTable.at(16));
+        VERIFY_ARE_EQUAL(RGB(0, 0, 0), pDispatch->_colorTable.at(64));
+
+        pDispatch->ClearState();
+    }
+
+    TEST_METHOD(TestSetClipboard)
+    {
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        // Passing an empty `Pc` param and a base64-encoded simple text `Pd` param works.
+        mach.ProcessString(L"\x1b]52;;Zm9v\x07");
+        VERIFY_ARE_EQUAL(L"foo", pDispatch->_copyContent);
+
+        pDispatch->ClearState();
+
+        // Passing an empty `Pc` param and a base64-encoded multi-lines text `Pd` works.
+        mach.ProcessString(L"\x1b]52;;Zm9vDQpiYXI=\x07");
+        VERIFY_ARE_EQUAL(L"foo\r\nbar", pDispatch->_copyContent);
+
+        pDispatch->ClearState();
+
+        // Passing an empty `Pc` param and a base64-encoded multibyte text `Pd` works.
+        // U+306b U+307b U+3093 U+3054 U+6c49 U+8bed U+d55c U+ad6d
+        mach.ProcessString(L"\x1b]52;;44Gr44G744KT44GU5rGJ6K+t7ZWc6rWt\x07");
+        VERIFY_ARE_EQUAL(L"にほんご汉语한국", pDispatch->_copyContent);
+
+        pDispatch->ClearState();
+
+        // Passing an empty `Pc` param and a base64-encoded multibyte text w/ emoji sequences `Pd` works.
+        // U+d83d U+dc4d U+d83d U+dc4d U+d83c U+dffb U+d83d U+dc4d U+d83c U+dffc U+d83d
+        // U+dc4d U+d83c U+dffd U+d83d U+dc4d U+d83c U+dffe U+d83d U+dc4d U+d83c U+dfff
+        mach.ProcessString(L"\x1b]52;;8J+RjfCfkY3wn4+78J+RjfCfj7zwn5GN8J+PvfCfkY3wn4++8J+RjfCfj78=\x07");
+        VERIFY_ARE_EQUAL(L"👍👍🏻👍🏼👍🏽👍🏾👍🏿", pDispatch->_copyContent);
+
+        pDispatch->ClearState();
+
+        // Passing a non-empty `Pc` param (`s0` is ignored) and a valid `Pd` param works.
+        mach.ProcessString(L"\x1b]52;s0;Zm9v\x07");
+        VERIFY_ARE_EQUAL(L"foo", pDispatch->_copyContent);
+
+        pDispatch->ClearState();
+
+        pDispatch->_copyContent = L"UNCHANGED";
+        // Passing only base64 `Pd` param is illegal, won't change the content.
+        mach.ProcessString(L"\x1b]52;Zm9v\x07");
+        VERIFY_ARE_EQUAL(L"UNCHANGED", pDispatch->_copyContent);
+
+        pDispatch->ClearState();
+
+        pDispatch->_copyContent = L"UNCHANGED";
+        // Passing a non-base64 `Pd` param is illegal, won't change the content.
+        mach.ProcessString(L"\x1b]52;;???\x07");
+        VERIFY_ARE_EQUAL(L"UNCHANGED", pDispatch->_copyContent);
+
+        pDispatch->ClearState();
+
+        pDispatch->_copyContent = L"UNCHANGED";
+        // Passing a valid `Pc;Pd` with one more extra param is illegal, won't change the content.
+        mach.ProcessString(L"\x1b]52;;;Zm9v\x07");
+        VERIFY_ARE_EQUAL(L"UNCHANGED", pDispatch->_copyContent);
+
+        pDispatch->ClearState();
+
+        pDispatch->_copyContent = L"UNCHANGED";
+        // Passing a query character won't change the content.
+        mach.ProcessString(L"\x1b]52;;?\x07");
+        VERIFY_ARE_EQUAL(L"UNCHANGED", pDispatch->_copyContent);
+
+        pDispatch->ClearState();
+
+        pDispatch->_copyContent = L"UNCHANGED";
+        // Passing a query character with missing `Pc` param is illegal, won't change the content.
+        mach.ProcessString(L"\x1b]52;?\x07");
+        VERIFY_ARE_EQUAL(L"UNCHANGED", pDispatch->_copyContent);
+
+        pDispatch->ClearState();
+
+        pDispatch->_copyContent = L"UNCHANGED";
+        // Passing a query character with one more extra param is illegal, won't change the content.
+        mach.ProcessString(L"\x1b]52;;;?\x07");
+        VERIFY_ARE_EQUAL(L"UNCHANGED", pDispatch->_copyContent);
+
+        pDispatch->ClearState();
+    }
+
+    TEST_METHOD(TestAddHyperlink)
+    {
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        // First we test with no custom id
+        // Process the opening osc 8 sequence
+        mach.ProcessString(L"\x1b]8;;test.url\x1b\\");
+        VERIFY_IS_TRUE(pDispatch->_hyperlinkMode);
+        VERIFY_ARE_EQUAL(pDispatch->_uri, L"test.url");
+        VERIFY_IS_TRUE(pDispatch->_customId.empty());
+
+        // Process the closing osc 8 sequences
+        mach.ProcessString(L"\x1b]8;;\x1b\\");
+        VERIFY_IS_FALSE(pDispatch->_hyperlinkMode);
+        VERIFY_IS_TRUE(pDispatch->_uri.empty());
+
+        // Next we test with a custom id
+        // Process the opening osc 8 sequence
+        mach.ProcessString(L"\x1b]8;id=testId;test2.url\x1b\\");
+        VERIFY_IS_TRUE(pDispatch->_hyperlinkMode);
+        VERIFY_ARE_EQUAL(pDispatch->_uri, L"test2.url");
+        VERIFY_ARE_EQUAL(pDispatch->_customId, L"testId");
+
+        // Process the closing osc 8 sequence
+        mach.ProcessString(L"\x1b]8;;\x1b\\");
+        VERIFY_IS_FALSE(pDispatch->_hyperlinkMode);
+        VERIFY_IS_TRUE(pDispatch->_uri.empty());
+
+        // Let's try more complicated params and URLs
+        mach.ProcessString(L"\x1b]8;id=testId;https://example.com\x1b\\");
+        VERIFY_IS_TRUE(pDispatch->_hyperlinkMode);
+        VERIFY_ARE_EQUAL(pDispatch->_uri, L"https://example.com");
+        VERIFY_ARE_EQUAL(pDispatch->_customId, L"testId");
+
+        mach.ProcessString(L"\x1b]8;;\x1b\\");
+        VERIFY_IS_FALSE(pDispatch->_hyperlinkMode);
+        VERIFY_IS_TRUE(pDispatch->_uri.empty());
+
+        // Multiple params
+        mach.ProcessString(L"\x1b]8;id=testId:foo=bar;https://example.com\x1b\\");
+        VERIFY_IS_TRUE(pDispatch->_hyperlinkMode);
+        VERIFY_ARE_EQUAL(pDispatch->_uri, L"https://example.com");
+        VERIFY_ARE_EQUAL(pDispatch->_customId, L"testId");
+
+        mach.ProcessString(L"\x1b]8;;\x1b\\");
+        VERIFY_IS_FALSE(pDispatch->_hyperlinkMode);
+        VERIFY_IS_TRUE(pDispatch->_uri.empty());
+
+        mach.ProcessString(L"\x1b]8;foo=bar:id=testId;https://example.com\x1b\\");
+        VERIFY_IS_TRUE(pDispatch->_hyperlinkMode);
+        VERIFY_ARE_EQUAL(pDispatch->_uri, L"https://example.com");
+        VERIFY_ARE_EQUAL(pDispatch->_customId, L"testId");
+
+        mach.ProcessString(L"\x1b]8;;\x1b\\");
+        VERIFY_IS_FALSE(pDispatch->_hyperlinkMode);
+        VERIFY_IS_TRUE(pDispatch->_uri.empty());
+
+        // URIs with query strings
+        mach.ProcessString(L"\x1b]8;id=testId;https://example.com?query1=value1\x1b\\");
+        VERIFY_IS_TRUE(pDispatch->_hyperlinkMode);
+        VERIFY_ARE_EQUAL(pDispatch->_uri, L"https://example.com?query1=value1");
+        VERIFY_ARE_EQUAL(pDispatch->_customId, L"testId");
+
+        mach.ProcessString(L"\x1b]8;;\x1b\\");
+        VERIFY_IS_FALSE(pDispatch->_hyperlinkMode);
+        VERIFY_IS_TRUE(pDispatch->_uri.empty());
+
+        mach.ProcessString(L"\x1b]8;id=testId;https://example.com?query1=value1;value2;value3\x1b\\");
+        VERIFY_IS_TRUE(pDispatch->_hyperlinkMode);
+        VERIFY_ARE_EQUAL(pDispatch->_uri, L"https://example.com?query1=value1;value2;value3");
+        VERIFY_ARE_EQUAL(pDispatch->_customId, L"testId");
+
+        mach.ProcessString(L"\x1b]8;;\x1b\\");
+        VERIFY_IS_FALSE(pDispatch->_hyperlinkMode);
+        VERIFY_IS_TRUE(pDispatch->_uri.empty());
+
+        pDispatch->ClearState();
+    }
+
+    TEST_METHOD(TestC1ParserMode)
+    {
+        auto dispatch = std::make_unique<StatefulDispatch>();
+        auto pDispatch = dispatch.get();
+        auto engine = std::make_unique<OutputStateMachineEngine>(std::move(dispatch));
+        StateMachine mach(std::move(engine));
+
+        Log::Comment(L"C1 parsing disabled: CSI control ignored and rest of sequence printed");
+        mach.SetParserMode(StateMachine::Mode::AcceptC1, false);
+        mach.ProcessString(L"\u009b"
+                           L"123A");
+        VERIFY_IS_FALSE(pDispatch->_cursorUp);
+        VERIFY_ARE_EQUAL(pDispatch->_printString, L"123A");
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"C1 parsing enabled: CSI interpreted and CUP sequence executed");
+        mach.SetParserMode(StateMachine::Mode::AcceptC1, true);
+        mach.ProcessString(L"\u009b"
+                           L"123A");
+        VERIFY_IS_TRUE(pDispatch->_cursorUp);
+        VERIFY_ARE_EQUAL(pDispatch->_cursorDistance, 123u);
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"C1 parsing disabled: NEL has no effect within a sequence");
+        mach.SetParserMode(StateMachine::Mode::AcceptC1, false);
+        mach.ProcessString(L"\x1b[12"
+                           L"\u0085"
+                           L";34H");
+        VERIFY_IS_FALSE(pDispatch->_lineFeed);
+        VERIFY_IS_TRUE(pDispatch->_cursorPosition);
+        VERIFY_ARE_EQUAL(pDispatch->_line, 12u);
+        VERIFY_ARE_EQUAL(pDispatch->_column, 34u);
+        VERIFY_ARE_EQUAL(pDispatch->_printString, L"");
+
+        pDispatch->ClearState();
+
+        Log::Comment(L"C1 parsing enabled: NEL aborts sequence and executes line feed");
+        mach.SetParserMode(StateMachine::Mode::AcceptC1, true);
+        mach.ProcessString(L"\x1b[12"
+                           L"\u0085"
+                           L";34H");
+        VERIFY_IS_TRUE(pDispatch->_lineFeed);
+        VERIFY_ARE_EQUAL(DispatchTypes::LineFeedType::WithReturn, pDispatch->_lineFeedType);
+        VERIFY_IS_FALSE(pDispatch->_cursorPosition);
+        VERIFY_ARE_EQUAL(pDispatch->_printString, L";34H");
 
         pDispatch->ClearState();
     }

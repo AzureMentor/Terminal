@@ -2,23 +2,18 @@
 // Licensed under the MIT license.
 
 #include "precomp.h"
-
 #include "alias.h"
 
-#include "_output.h"
+#include <til/hash.h>
+
 #include "output.h"
-#include "stream.h"
-#include "_stream.h"
-#include "dbcs.h"
 #include "handle.h"
 #include "misc.h"
 #include "../types/inc/convert.hpp"
-#include "srvinit.h"
-#include "resource.h"
 
 #include "ApiRoutines.h"
 
-#include "..\interactivity\inc\ServiceLocator.hpp"
+#include "../interactivity/inc/ServiceLocator.hpp"
 
 #pragma hdrstop
 
@@ -28,10 +23,12 @@ struct case_insensitive_hash
 {
     std::size_t operator()(const std::wstring& key) const
     {
-        std::wstring lower(key);
-        std::transform(lower.begin(), lower.end(), lower.begin(), ::towlower);
-        std::hash<std::wstring> hash;
-        return hash(lower);
+        til::hasher h;
+        for (const auto& ch : key)
+        {
+            h.write(::towlower(ch));
+        }
+        return h.finalize();
     }
 };
 
@@ -65,8 +62,8 @@ std::unordered_map<std::wstring,
                                                         const std::string_view target,
                                                         const std::string_view exeName) noexcept
 {
-    const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-    UINT const codepage = gci.CP;
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    const auto codepage = gci.CP;
 
     try
     {
@@ -147,9 +144,9 @@ std::unordered_map<std::wstring,
     // Ensure output variables are initialized
     writtenOrNeeded = 0;
 
-    if (target.has_value() && target.value().size() > 0)
+    if (target.has_value() && target->size() > 0)
     {
-        target.value().at(0) = UNICODE_NULL;
+        til::at(*target, 0) = UNICODE_NULL;
     }
 
     std::wstring exeNameString(exeName);
@@ -166,8 +163,8 @@ std::unordered_map<std::wstring,
     RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_GEN_FAILURE), targetString.size() == 0);
 
     // TargetLength is a byte count, convert to characters.
-    size_t targetSize = targetString.size();
-    size_t const cchNull = 1;
+    auto targetSize = targetString.size();
+    const size_t cchNull = 1;
 
     // The total space we need is the length of the string + the null terminator.
     size_t neededSize;
@@ -178,9 +175,9 @@ std::unordered_map<std::wstring,
     if (target.has_value())
     {
         // if the user didn't give us enough space, return with insufficient buffer code early.
-        RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER), gsl::narrow<size_t>(target.value().size()) < neededSize);
+        RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER), target->size() < neededSize);
 
-        RETURN_IF_FAILED(StringCchCopyNW(target.value().data(), target.value().size(), targetString.data(), targetSize));
+        RETURN_IF_FAILED(StringCchCopyNW(target->data(), target->size(), targetString.data(), targetSize));
     }
 
     return S_OK;
@@ -202,8 +199,8 @@ std::unordered_map<std::wstring,
                                                         size_t& written,
                                                         const std::string_view exeName) noexcept
 {
-    const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-    UINT const codepage = gci.CP;
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    const auto codepage = gci.CP;
 
     // Ensure output variables are initialized
     written = 0;
@@ -211,7 +208,7 @@ std::unordered_map<std::wstring,
     {
         if (target.size() > 0)
         {
-            target.at(0) = ANSI_NULL;
+            til::at(target, 0) = ANSI_NULL;
         }
 
         LockConsole();
@@ -232,7 +229,7 @@ std::unordered_map<std::wstring,
         RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER), 0 == target.size());
 
         // Allocate a unicode buffer of the right size.
-        std::unique_ptr<wchar_t[]> targetBuffer = std::make_unique<wchar_t[]>(targetNeeded);
+        auto targetBuffer = std::make_unique<wchar_t[]>(targetNeeded);
         RETURN_IF_NULL_ALLOC(targetBuffer);
 
         // Call the Unicode version of this method
@@ -280,7 +277,7 @@ std::unordered_map<std::wstring,
 
     try
     {
-        HRESULT hr = GetConsoleAliasWImplHelper(source, target, written, exeName);
+        auto hr = GetConsoleAliasWImplHelper(source, target, written, exeName);
 
         if (FAILED(hr))
         {
@@ -324,12 +321,12 @@ static std::wstring aliasesSeparator(L"=");
 
         // Each of the aliases will be made up of the source, a separator, the target, then a null character.
         // They are of the form "Source=Target" when returned.
-        size_t const cchNull = 1;
-        size_t cchSeperator = aliasesSeparator.size();
+        const size_t cchNull = 1;
+        auto cchSeparator = aliasesSeparator.size();
         // If we're counting how much multibyte space will be needed, trial convert the separator before we add.
         if (!countInUnicode)
         {
-            cchSeperator = GetALengthFromW(codepage, aliasesSeparator);
+            cchSeparator = GetALengthFromW(codepage, aliasesSeparator);
         }
 
         // Find without creating.
@@ -340,8 +337,8 @@ static std::wstring aliasesSeparator(L"=");
             for (auto& pair : list)
             {
                 // Alias stores lengths in bytes.
-                size_t cchSource = pair.first.size();
-                size_t cchTarget = pair.second.size();
+                auto cchSource = pair.first.size();
+                auto cchTarget = pair.second.size();
 
                 // If we're counting how much multibyte space will be needed, trial convert the source and target strings before we add.
                 if (!countInUnicode)
@@ -352,7 +349,7 @@ static std::wstring aliasesSeparator(L"=");
 
                 // Accumulate all sizes to the final string count.
                 RETURN_IF_FAILED(SizeTAdd(cchNeeded, cchSource, &cchNeeded));
-                RETURN_IF_FAILED(SizeTAdd(cchNeeded, cchSeperator, &cchNeeded));
+                RETURN_IF_FAILED(SizeTAdd(cchNeeded, cchSeparator, &cchNeeded));
                 RETURN_IF_FAILED(SizeTAdd(cchNeeded, cchTarget, &cchNeeded));
                 RETURN_IF_FAILED(SizeTAdd(cchNeeded, cchNull, &cchNeeded));
             }
@@ -376,8 +373,8 @@ static std::wstring aliasesSeparator(L"=");
 [[nodiscard]] HRESULT ApiRoutines::GetConsoleAliasesLengthAImpl(const std::string_view exeName,
                                                                 size_t& bufferRequired) noexcept
 {
-    const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-    UINT const codepage = gci.CP;
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    const auto codepage = gci.CP;
 
     // Ensure output variables are initialized
     bufferRequired = 0;
@@ -449,19 +446,19 @@ void Alias::s_ClearCmdExeAliases()
     // Ensure output variables are initialized.
     writtenOrNeeded = 0;
 
-    if (aliasBuffer.has_value() && aliasBuffer.value().size() > 0)
+    if (aliasBuffer.has_value() && aliasBuffer->size() > 0)
     {
-        aliasBuffer.value().at(0) = UNICODE_NULL;
+        til::at(*aliasBuffer, 0) = UNICODE_NULL;
     }
 
     std::wstring exeNameString(exeName);
 
-    LPWSTR AliasesBufferPtrW = aliasBuffer.has_value() ? aliasBuffer.value().data() : nullptr;
+    auto AliasesBufferPtrW = aliasBuffer.has_value() ? aliasBuffer->data() : nullptr;
     size_t cchTotalLength = 0; // accumulate the characters we need/have copied as we walk the list
 
-    // Each of the alises will be made up of the source, a separator, the target, then a null character.
+    // Each of the aliases will be made up of the source, a separator, the target, then a null character.
     // They are of the form "Source=Target" when returned.
-    size_t const cchNull = 1;
+    const size_t cchNull = 1;
 
     // Find without creating.
     auto exeIter = g_aliasData.find(exeNameString);
@@ -471,8 +468,8 @@ void Alias::s_ClearCmdExeAliases()
         for (auto& pair : list)
         {
             // Alias stores lengths in bytes.
-            size_t const cchSource = pair.first.size();
-            size_t const cchTarget = pair.second.size();
+            const auto cchSource = pair.first.size();
+            const auto cchTarget = pair.second.size();
 
             // Add up how many characters we will need for the full alias data.
             size_t cchNeeded = 0;
@@ -489,10 +486,10 @@ void Alias::s_ClearCmdExeAliases()
                 size_t cchNewTotal;
                 RETURN_IF_FAILED(SizeTAdd(cchTotalLength, cchNeeded, &cchNewTotal));
 
-                RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW), cchNewTotal > gsl::narrow<size_t>(aliasBuffer.value().size()));
+                RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW), cchNewTotal > aliasBuffer->size());
 
                 size_t cchAliasBufferRemaining;
-                RETURN_IF_FAILED(SizeTSub(aliasBuffer.value().size(), cchTotalLength, &cchAliasBufferRemaining));
+                RETURN_IF_FAILED(SizeTSub(aliasBuffer->size(), cchTotalLength, &cchAliasBufferRemaining));
 
                 RETURN_IF_FAILED(StringCchCopyNW(AliasesBufferPtrW, cchAliasBufferRemaining, pair.first.data(), cchSource));
                 RETURN_IF_FAILED(SizeTSub(cchAliasBufferRemaining, cchSource, &cchAliasBufferRemaining));
@@ -533,8 +530,8 @@ void Alias::s_ClearCmdExeAliases()
                                                           gsl::span<char> alias,
                                                           size_t& written) noexcept
 {
-    const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-    UINT const codepage = gci.CP;
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    const auto codepage = gci.CP;
 
     // Ensure output variables are initialized
     written = 0;
@@ -543,7 +540,7 @@ void Alias::s_ClearCmdExeAliases()
     {
         if (alias.size() > 0)
         {
-            alias.at(0) = '\0';
+            til::at(alias, 0) = '\0';
         }
 
         LockConsole();
@@ -561,7 +558,7 @@ void Alias::s_ClearCmdExeAliases()
         RETURN_HR_IF(S_OK, 0 == bufferNeeded);
 
         // Allocate a unicode buffer of the right size.
-        std::unique_ptr<wchar_t[]> aliasBuffer = std::make_unique<wchar_t[]>(bufferNeeded);
+        auto aliasBuffer = std::make_unique<wchar_t[]>(bufferNeeded);
         RETURN_IF_NULL_ALLOC(aliasBuffer);
 
         // Call the Unicode version of this method
@@ -574,7 +571,7 @@ void Alias::s_ClearCmdExeAliases()
         // Copy safely to the output buffer
         // - Aliases are a series of null terminated strings. We cannot use a SafeString function to copy.
         //   So instead, validate and use raw memory copy.
-        RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW), converted.size() > gsl::narrow<size_t>(alias.size()));
+        RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW), converted.size() > alias.size());
         memcpy_s(alias.data(), alias.size(), converted.data(), converted.size());
 
         // And return the size copied.
@@ -626,11 +623,11 @@ void Alias::s_ClearCmdExeAliases()
     size_t cchNeeded = 0;
 
     // Each alias exe will be made up of the string payload and a null terminator.
-    size_t const cchNull = 1;
+    const size_t cchNull = 1;
 
     for (auto& pair : g_aliasData)
     {
-        size_t cchExe = pair.first.size();
+        auto cchExe = pair.first.size();
 
         // If we're counting how much multibyte space will be needed, trial convert the exe string before we add.
         if (!countInUnicode)
@@ -657,7 +654,7 @@ void Alias::s_ClearCmdExeAliases()
 [[nodiscard]] HRESULT ApiRoutines::GetConsoleAliasExesLengthAImpl(size_t& bufferRequired) noexcept
 {
     LockConsole();
-    const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
     auto Unlock = wil::scope_exit([&] { UnlockConsole(); });
 
     return GetConsoleAliasExesLengthImplHelper(false, gci.CP, bufferRequired);
@@ -696,20 +693,20 @@ void Alias::s_ClearCmdExeAliases()
 {
     // Ensure output variables are initialized.
     writtenOrNeeded = 0;
-    if (aliasExesBuffer.has_value() && aliasExesBuffer.value().size() > 0)
+    if (aliasExesBuffer.has_value() && aliasExesBuffer->size() > 0)
     {
-        aliasExesBuffer.value().at(0) = UNICODE_NULL;
+        til::at(*aliasExesBuffer, 0) = UNICODE_NULL;
     }
 
-    LPWSTR AliasExesBufferPtrW = aliasExesBuffer.has_value() ? aliasExesBuffer.value().data() : nullptr;
+    auto AliasExesBufferPtrW = aliasExesBuffer.has_value() ? aliasExesBuffer->data() : nullptr;
     size_t cchTotalLength = 0; // accumulate the characters we need/have copied as we walk the list
 
-    size_t const cchNull = 1;
+    const size_t cchNull = 1;
 
     for (auto& pair : g_aliasData)
     {
         // AliasList stores length in bytes. Add 1 for null terminator.
-        size_t const cchExe = pair.first.size();
+        const auto cchExe = pair.first.size();
 
         size_t cchNeeded;
         RETURN_IF_FAILED(SizeTAdd(cchExe, cchNull, &cchNeeded));
@@ -722,10 +719,10 @@ void Alias::s_ClearCmdExeAliases()
             // Error out early if there is a problem.
             size_t cchNewTotal;
             RETURN_IF_FAILED(SizeTAdd(cchTotalLength, cchNeeded, &cchNewTotal));
-            RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW), cchNewTotal > gsl::narrow<size_t>(aliasExesBuffer.value().size()));
+            RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW), cchNewTotal > aliasExesBuffer->size());
 
             size_t cchRemaining;
-            RETURN_IF_FAILED(SizeTSub(aliasExesBuffer.value().size(), cchTotalLength, &cchRemaining));
+            RETURN_IF_FAILED(SizeTSub(aliasExesBuffer->size(), cchTotalLength, &cchRemaining));
 
             RETURN_IF_FAILED(StringCchCopyNW(AliasExesBufferPtrW, cchRemaining, pair.first.data(), cchExe));
             AliasExesBufferPtrW += cchNeeded;
@@ -751,8 +748,8 @@ void Alias::s_ClearCmdExeAliases()
 [[nodiscard]] HRESULT ApiRoutines::GetConsoleAliasExesAImpl(gsl::span<char> aliasExes,
                                                             size_t& written) noexcept
 {
-    const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-    UINT const codepage = gci.CP;
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    const auto codepage = gci.CP;
 
     // Ensure output variables are initialized
     written = 0;
@@ -761,7 +758,7 @@ void Alias::s_ClearCmdExeAliases()
     {
         if (aliasExes.size() > 0)
         {
-            aliasExes.at(0) = '\0';
+            til::at(aliasExes, 0) = '\0';
         }
 
         LockConsole();
@@ -775,7 +772,7 @@ void Alias::s_ClearCmdExeAliases()
         RETURN_HR_IF(S_OK, 0 == bufferNeeded);
 
         // Allocate a unicode buffer of the right size.
-        std::unique_ptr<wchar_t[]> targetBuffer = std::make_unique<wchar_t[]>(bufferNeeded);
+        auto targetBuffer = std::make_unique<wchar_t[]>(bufferNeeded);
         RETURN_IF_NULL_ALLOC(targetBuffer);
 
         // Call the Unicode version of this method
@@ -788,7 +785,7 @@ void Alias::s_ClearCmdExeAliases()
         // Copy safely to the output buffer
         // - AliasExes are a series of null terminated strings. We cannot use a SafeString function to copy.
         //   So instead, validate and use raw memory copy.
-        RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW), converted.size() > gsl::narrow<size_t>(aliasExes.size()));
+        RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_BUFFER_OVERFLOW), converted.size() > aliasExes.size());
         memcpy_s(aliasExes.data(), aliasExes.size(), converted.data(), converted.size());
 
         // And return the size copied.
@@ -818,18 +815,6 @@ void Alias::s_ClearCmdExeAliases()
         return GetConsoleAliasExesWImplHelper(aliasExes, written);
     }
     CATCH_RETURN();
-}
-
-// Routine Description:
-// - Trims leading spaces off of a string
-// Arguments:
-// - str - String to trim
-void Alias::s_TrimLeadingSpaces(std::wstring& str)
-{
-    // Erase from the beginning of the string up until the first
-    // character found that is not a space.
-    str.erase(str.begin(),
-              std::find_if(str.begin(), str.end(), [](wchar_t ch) { return !std::iswspace(ch); }));
 }
 
 // Routine Description:
@@ -1146,13 +1131,10 @@ std::wstring Alias::s_MatchAndCopyAlias(const std::wstring& sourceText,
                                         size_t& lineCount)
 {
     // Copy source text into a local for manipulation.
-    std::wstring sourceCopy(sourceText);
+    auto sourceCopy = sourceText;
 
     // Trim trailing \r\n off of sourceCopy if it has one.
     s_TrimTrailingCrLf(sourceCopy);
-
-    // Trim leading spaces off of sourceCopy if it has any.
-    s_TrimLeadingSpaces(sourceCopy);
 
     // Check if we have an EXE in the list that matches the request first.
     auto exeIter = g_aliasData.find(exeName);
@@ -1197,7 +1179,7 @@ std::wstring Alias::s_MatchAndCopyAlias(const std::wstring& sourceText,
     const auto allParams = s_GetArgString(sourceCopy);
 
     // The final text will be the target but with macros replaced.
-    std::wstring finalText(target);
+    auto finalText = target;
     lineCount = s_ReplaceMacros(finalText, tokens, allParams);
 
     return finalText;
@@ -1216,7 +1198,7 @@ std::wstring Alias::s_MatchAndCopyAlias(const std::wstring& sourceText,
 // - LineCount - aliases can contain multiple commands.  $T is the command separator
 // Return Value:
 // - None. It will just maintain the source as the target if we can't match an alias.
-void Alias::s_MatchAndCopyAliasLegacy(_In_reads_bytes_(cbSource) PWCHAR pwchSource,
+void Alias::s_MatchAndCopyAliasLegacy(_In_reads_bytes_(cbSource) PCWCH pwchSource,
                                       _In_ size_t cbSource,
                                       _Out_writes_bytes_(cbTargetWritten) PWCHAR pwchTarget,
                                       _In_ const size_t cbTargetSize,

@@ -10,7 +10,7 @@
 // structure when a keydown message is translated. Then when we receive a
 // wm_[sys][dead]char message, we retrieve it and clear out the record.
 
-#define CONSOLE_FREE_KEY_INFO 0
+#define CONSOLE_FREE_KEY_INFO nullptr
 #define CONSOLE_MAX_KEY_INFO 32
 
 typedef struct _CONSOLE_KEY_INFO
@@ -69,7 +69,7 @@ void RetrieveKeyInfo(_In_ HWND hWnd, _Out_ PWORD pwVirtualKeyCode, _Inout_ PWORD
     }
     else
     {
-        *pwVirtualKeyCode = (WORD)MapVirtualKeyW(*pwVirtualScanCode, 3);
+        *pwVirtualKeyCode = (WORD)OneCoreSafeMapVirtualKeyW(*pwVirtualScanCode, 3);
     }
 }
 

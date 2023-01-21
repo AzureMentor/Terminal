@@ -3,19 +3,28 @@
 
 #include "precomp.h"
 
+// Some of the interactivity classes pulled in by ServiceLocator.hpp are not
+// yet audit-safe, so for now we'll need to disable a bunch of warnings.
+#pragma warning(disable : 26432)
+#pragma warning(disable : 26440)
+#pragma warning(disable : 26455)
+
+// We end up including ApiMessage.h somehow, which uses nameless unions
+#pragma warning(disable : 4201)
+
 #include "InteractDispatch.hpp"
-#include "DispatchCommon.hpp"
-#include "conGetSet.hpp"
+#include "../../host/conddkrefs.h"
+#include "../../interactivity/inc/ServiceLocator.hpp"
+#include "../../interactivity/inc/EventSynthesis.hpp"
 #include "../../types/inc/Viewport.hpp"
-#include "../../types/inc/convert.hpp"
 #include "../../inc/unicode.hpp"
 
+using namespace Microsoft::Console::Interactivity;
 using namespace Microsoft::Console::Types;
 using namespace Microsoft::Console::VirtualTerminal;
 
-// takes ownership of pConApi
-InteractDispatch::InteractDispatch(ConGetSet* const pConApi) :
-    _pConApi(THROW_IF_NULL_ALLOC(pConApi))
+InteractDispatch::InteractDispatch() :
+    _api{ ServiceLocator::LocateGlobals().getConsoleInformation() }
 {
 }
 
@@ -28,109 +37,99 @@ InteractDispatch::InteractDispatch(ConGetSet* const pConApi) :
 // Arguments:
 // - inputEvents: a collection of IInputEvents
 // Return Value:
-// True if handled successfully. False otherwise.
-bool InteractDispatch::WriteInput(_In_ std::deque<std::unique_ptr<IInputEvent>>& inputEvents)
+// - True.
+bool InteractDispatch::WriteInput(std::deque<std::unique_ptr<IInputEvent>>& inputEvents)
 {
-    size_t dwWritten = 0;
-    return !!_pConApi->PrivateWriteConsoleInputW(inputEvents, dwWritten);
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    gci.GetActiveInputBuffer()->Write(inputEvents);
+    return true;
 }
 
 // Method Description:
-// - Writes a Ctrl-C event to the host. The host will then decide what to do
-//      with it, including potentially sending an interrupt to a client
-//      application.
+// - Writes a key event to the host in a fashion that will enable the host to
+//   process special keys such as Ctrl-C or Ctrl+Break. The host will then
+//   decide what to do with it, including potentially sending an interrupt to a
+//   client application.
 // Arguments:
-// <none>
+// - event: The key to send to the host.
 // Return Value:
-// True if handled successfully. False otherwise.
-bool InteractDispatch::WriteCtrlC()
+// - True.
+bool InteractDispatch::WriteCtrlKey(const KeyEvent& event)
 {
-    KeyEvent key = KeyEvent(true, 1, 'C', 0, UNICODE_ETX, LEFT_CTRL_PRESSED);
-    return !!_pConApi->PrivateWriteConsoleControlInput(key);
+    HandleGenericKeyEvent(event, false);
+    return true;
 }
 
 // Method Description:
 // - Writes a string of input to the host. The string is converted to keystrokes
 //      that will faithfully represent the input by CharToKeyEvents.
 // Arguments:
-// - pws: a string to write to the console.
-// - cch: the number of chars in pws.
+// - string : a string to write to the console.
 // Return Value:
-// True if handled successfully. False otherwise.
-bool InteractDispatch::WriteString(_In_reads_(cch) const wchar_t* const pws,
-                                   const size_t cch)
+// - True.
+bool InteractDispatch::WriteString(const std::wstring_view string)
 {
-    if (cch == 0)
+    if (!string.empty())
     {
-        return true;
-    }
-
-    unsigned int codepage = 0;
-    bool fSuccess = !!_pConApi->GetConsoleOutputCP(&codepage);
-    if (fSuccess)
-    {
+        const auto codepage = _api.GetConsoleOutputCP();
         std::deque<std::unique_ptr<IInputEvent>> keyEvents;
 
-        for (size_t i = 0; i < cch; ++i)
+        for (const auto& wch : string)
         {
-            std::deque<std::unique_ptr<KeyEvent>> convertedEvents = CharToKeyEvents(pws[i], codepage);
+            auto convertedEvents = CharToKeyEvents(wch, codepage);
 
             std::move(convertedEvents.begin(),
                       convertedEvents.end(),
                       std::back_inserter(keyEvents));
         }
 
-        fSuccess = WriteInput(keyEvents);
+        WriteInput(keyEvents);
     }
-    return fSuccess;
+    return true;
 }
 
 //Method Description:
 // Window Manipulation - Performs a variety of actions relating to the window,
 //      such as moving the window position, resizing the window, querying
 //      window state, forcing the window to repaint, etc.
-//  This is kept seperate from the output version, as there may be
+//  This is kept separate from the output version, as there may be
 //      codes that are supported in one direction but not the other.
 //Arguments:
-// - uiFunction - An identifier of the WindowManipulation function to perform
-// - rgusParams - Additional parameters to pass to the function
-// - cParams - size of rgusParams
+// - function - An identifier of the WindowManipulation function to perform
+// - parameter1 - The first optional parameter for the function
+// - parameter2 - The second optional parameter for the function
 // Return value:
 // True if handled successfully. False otherwise.
-bool InteractDispatch::WindowManipulation(const DispatchTypes::WindowManipulationType uiFunction,
-                                          _In_reads_(cParams) const unsigned short* const rgusParams,
-                                          const size_t cParams)
+bool InteractDispatch::WindowManipulation(const DispatchTypes::WindowManipulationType function,
+                                          const VTParameter parameter1,
+                                          const VTParameter parameter2)
 {
-    bool fSuccess = false;
     // Other Window Manipulation functions:
     //  MSFT:13271098 - QueryViewport
     //  MSFT:13271146 - QueryScreenSize
-    switch (uiFunction)
+    switch (function)
     {
+    case DispatchTypes::WindowManipulationType::DeIconifyWindow:
+        _api.ShowWindow(true);
+        return true;
+    case DispatchTypes::WindowManipulationType::IconifyWindow:
+        _api.ShowWindow(false);
+        return true;
     case DispatchTypes::WindowManipulationType::RefreshWindow:
-        if (cParams == 0)
-        {
-            fSuccess = DispatchCommon::s_RefreshWindow(*_pConApi);
-        }
-        break;
+        _api.GetTextBuffer().TriggerRedrawAll();
+        return true;
     case DispatchTypes::WindowManipulationType::ResizeWindowInCharacters:
         // TODO:GH#1765 We should introduce a better `ResizeConpty` function to
-        // the ConGetSet interface, that specifically handles a conpty resize.
-        if (cParams == 2)
+        // ConhostInternalGetSet, that specifically handles a conpty resize.
+        if (_api.ResizeWindow(parameter2.value_or(0), parameter1.value_or(0)))
         {
-            fSuccess = DispatchCommon::s_ResizeWindow(*_pConApi, rgusParams[1], rgusParams[0]);
-            if (fSuccess)
-            {
-                DispatchCommon::s_SuppressResizeRepaint(*_pConApi);
-            }
+            auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+            THROW_IF_FAILED(gci.GetVtIo()->SuppressResizeRepaint());
         }
-        break;
+        return true;
     default:
-        fSuccess = false;
-        break;
+        return false;
     }
-
-    return fSuccess;
 }
 
 //Method Description:
@@ -140,69 +139,110 @@ bool InteractDispatch::WindowManipulation(const DispatchTypes::WindowManipulatio
 // - row: The row to move the cursor to.
 // - col: The column to move the cursor to.
 // Return value:
-// True if we successfully moved the cursor to the given location.
-// False otherwise, including if given invalid coordinates (either component being 0)
-//  or if any API calls failed.
-bool InteractDispatch::MoveCursor(const unsigned int row, const unsigned int col)
+// - True.
+bool InteractDispatch::MoveCursor(const VTInt row, const VTInt col)
 {
-    unsigned int uiRow = row;
-    unsigned int uiCol = col;
+    // First retrieve some information about the buffer
+    const auto viewport = _api.GetViewport();
 
-    bool fSuccess = true;
     // In VT, the origin is 1,1. For our array, it's 0,0. So subtract 1.
-    if (row != 0)
-    {
-        uiRow = row - 1;
-    }
-    else
-    {
-        // The parser should never return 0 (0 maps to 1), so this is a failure condition.
-        fSuccess = false;
-    }
+    // Apply boundary tests to ensure the cursor isn't outside the viewport rectangle.
+    til::point coordCursor{ col - 1 + viewport.left, row - 1 + viewport.top };
+    coordCursor.y = std::clamp(coordCursor.y, viewport.top, viewport.bottom);
+    coordCursor.x = std::clamp(coordCursor.x, viewport.left, viewport.right);
 
-    if (col != 0)
-    {
-        uiCol = col - 1;
-    }
-    else
-    {
-        // The parser should never return 0 (0 maps to 1), so this is a failure condition.
-        fSuccess = false;
-    }
+    // Finally, attempt to set the adjusted cursor position back into the console.
+    const auto api = gsl::not_null{ ServiceLocator::LocateGlobals().api };
+    auto& info = ServiceLocator::LocateGlobals().getConsoleInformation().GetActiveOutputBuffer();
+    return SUCCEEDED(api->SetConsoleCursorPositionImpl(info, coordCursor));
+}
 
-    if (fSuccess)
-    {
-        // First retrieve some information about the buffer
-        CONSOLE_SCREEN_BUFFER_INFOEX csbiex = { 0 };
-        csbiex.cbSize = sizeof(CONSOLE_SCREEN_BUFFER_INFOEX);
-        fSuccess = !!_pConApi->GetConsoleScreenBufferInfoEx(&csbiex);
+// Routine Description:
+// - Checks if the InputBuffer is willing to accept VT Input directly
+// Arguments:
+// - <none>
+// Return value:
+// - true if enabled (see IsInVirtualTerminalInputMode). false otherwise.
+bool InteractDispatch::IsVtInputEnabled() const
+{
+    return _api.IsVtInputEnabled();
+}
 
-        if (fSuccess)
+// Method Description:
+// - Inform the console that the window is focused. This is used by ConPTY.
+//   Terminals can send ConPTY a FocusIn/FocusOut sequence on the input pipe,
+//   which will end up here. This will update the console's internal tracker if
+//   it's focused or not, as to match the end-terminal's state.
+// - Used to call ConsoleControl(ConsoleSetForeground,...).
+// Arguments:
+// - focused: if the terminal is now focused
+// Return Value:
+// - true always.
+bool InteractDispatch::FocusChanged(const bool focused) const
+{
+    auto& g = ServiceLocator::LocateGlobals();
+    auto& gci = g.getConsoleInformation();
+
+    // This should likely always be true - we shouldn't ever have an
+    // InteractDispatch outside ConPTY mode, but just in case...
+    if (gci.IsInVtIoMode())
+    {
+        auto shouldActuallyFocus = false;
+
+        // From https://github.com/microsoft/terminal/pull/12799#issuecomment-1086289552
+        // Make sure that the process that's telling us it's focused, actually
+        // _is_ in the FG. We don't want to allow malicious.exe to say "yep I'm
+        // in the foreground, also, here's a popup" if it isn't actually in the
+        // FG.
+        if (focused)
         {
-            COORD coordCursor = csbiex.dwCursorPosition;
-
-            // Safely convert the UINT positions we were given into shorts (which is the size the console deals with)
-            fSuccess = SUCCEEDED(UIntToShort(uiRow, &coordCursor.Y)) &&
-                       SUCCEEDED(UIntToShort(uiCol, &coordCursor.X));
-
-            if (fSuccess)
+            if (const auto pseudoHwnd{ ServiceLocator::LocatePseudoWindow() })
             {
-                // Set the line and column values as offsets from the viewport edge. Use safe math to prevent overflow.
-                fSuccess = SUCCEEDED(ShortAdd(coordCursor.Y, csbiex.srWindow.Top, &coordCursor.Y)) &&
-                           SUCCEEDED(ShortAdd(coordCursor.X, csbiex.srWindow.Left, &coordCursor.X));
+                // They want focus, we found a pseudo hwnd.
 
-                if (fSuccess)
+                // BODGY
+                //
+                // This needs to be GA_ROOTOWNER here. Not GA_ROOT, GA_PARENT,
+                // or GetParent. The ConPTY hwnd is an owned, top-level, popup,
+                // non-parented window. It does not have a parent set. It does
+                // have an owner set. It is not a WS_CHILD window. This
+                // combination of things allows us to find the owning window
+                // with GA_ROOTOWNER. GA_ROOT will get us ourselves, and
+                // GA_PARENT will return the desktop HWND.
+                //
+                // See GH#13066
+
+                if (const auto ownerHwnd{ ::GetAncestor(pseudoHwnd, GA_ROOTOWNER) })
                 {
-                    // Apply boundary tests to ensure the cursor isn't outside the viewport rectangle.
-                    coordCursor.Y = std::clamp(coordCursor.Y, csbiex.srWindow.Top, gsl::narrow<SHORT>(csbiex.srWindow.Bottom - 1));
-                    coordCursor.X = std::clamp(coordCursor.X, csbiex.srWindow.Left, gsl::narrow<SHORT>(csbiex.srWindow.Right - 1));
+                    // We have an owner from a previous call to ReparentWindow
 
-                    // Finally, attempt to set the adjusted cursor position back into the console.
-                    fSuccess = !!_pConApi->SetConsoleCursorPosition(coordCursor);
+                    if (const auto currentFgWindow{ ::GetForegroundWindow() })
+                    {
+                        // There is a window in the foreground (it's possible there
+                        // isn't one)
+
+                        // Get the PID of the current FG window, and compare with our owner's PID.
+                        DWORD currentFgPid{ 0 };
+                        DWORD ownerPid{ 0 };
+                        GetWindowThreadProcessId(currentFgWindow, &currentFgPid);
+                        GetWindowThreadProcessId(ownerHwnd, &ownerPid);
+
+                        if (ownerPid == currentFgPid)
+                        {
+                            // Huzzah, the app that owns us is actually the FG
+                            // process. They're allowed to grand FG rights.
+                            shouldActuallyFocus = true;
+                        }
+                    }
                 }
             }
         }
-    }
 
-    return fSuccess;
+        WI_UpdateFlag(gci.Flags, CONSOLE_HAS_FOCUS, shouldActuallyFocus);
+        gci.ProcessHandleList.ModifyConsoleProcessFocus(shouldActuallyFocus);
+        gci.pInputBuffer->Write(std::make_unique<FocusEvent>(focused));
+    }
+    // Does nothing outside of ConPTY. If there's a real HWND, then the HWND is solely in charge.
+
+    return true;
 }

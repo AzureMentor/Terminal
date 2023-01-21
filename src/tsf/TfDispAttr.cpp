@@ -29,13 +29,9 @@ Notes:
 //
 //----------------------------------------------------------------------------
 
-CicDisplayAttributeMgr::CicDisplayAttributeMgr()
-{
-}
+CicDisplayAttributeMgr::CicDisplayAttributeMgr() = default;
 
-CicDisplayAttributeMgr::~CicDisplayAttributeMgr()
-{
-}
+CicDisplayAttributeMgr::~CicDisplayAttributeMgr() = default;
 
 //+---------------------------------------------------------------------------
 //
@@ -50,10 +46,10 @@ CicDisplayAttributeMgr::~CicDisplayAttributeMgr()
                                                                                     IEnumTfRanges** ppEnum,
                                                                                     ULONG* pulNumProp)
 {
-    HRESULT hr = E_FAIL;
+    auto hr = E_FAIL;
     try
     {
-        ULONG ulNumProp = static_cast<ULONG>(m_DispAttrProp.size());
+        auto ulNumProp = static_cast<ULONG>(m_DispAttrProp.size());
         if (ulNumProp)
         {
             // TrackProperties wants an array of GUID *'s
@@ -64,7 +60,7 @@ CicDisplayAttributeMgr::~CicDisplayAttributeMgr()
             }
 
             wil::com_ptr<ITfReadOnlyProperty> pProp;
-            if (SUCCEEDED(hr = pic->TrackProperties(ppguidProp.get(), ulNumProp, 0, NULL, &pProp)))
+            if (SUCCEEDED(hr = pic->TrackProperties(ppguidProp.get(), ulNumProp, nullptr, NULL, &pProp)))
             {
                 hr = pProp->EnumRanges(ec, ppEnum, pRange);
                 if (SUCCEEDED(hr))
@@ -99,7 +95,7 @@ CicDisplayAttributeMgr::~CicDisplayAttributeMgr()
 {
     VARIANT var;
 
-    HRESULT hr = E_FAIL;
+    auto hr = E_FAIL;
 
     if (SUCCEEDED(pProp->GetValue(ec, pRange, &var)))
     {
@@ -109,7 +105,7 @@ CicDisplayAttributeMgr::~CicDisplayAttributeMgr()
         if (wil::try_com_query_to(var.punkVal, &pEnumPropertyVal))
         {
             TF_PROPERTYVAL tfPropVal;
-            while (pEnumPropertyVal->Next(1, &tfPropVal, NULL) == S_OK)
+            while (pEnumPropertyVal->Next(1, &tfPropVal, nullptr) == S_OK)
             {
                 if (tfPropVal.varValue.vt == VT_EMPTY)
                 {
@@ -118,7 +114,7 @@ CicDisplayAttributeMgr::~CicDisplayAttributeMgr()
 
                 FAIL_FAST_IF(!(tfPropVal.varValue.vt == VT_I4)); // expecting GUIDATOMs
 
-                TfGuidAtom gaVal = (TfGuidAtom)tfPropVal.varValue.lVal;
+                auto gaVal = (TfGuidAtom)tfPropVal.varValue.lVal;
 
                 GUID guid;
                 pcat->GetGUID(gaVal, &guid);
@@ -189,7 +185,7 @@ CicDisplayAttributeMgr::~CicDisplayAttributeMgr()
             //
             m_DispAttrProp.emplace_back(GUID_PROP_ATTRIBUTE);
 
-            while (pEnumProp->Next(1, &guidProp, NULL) == S_OK)
+            while (pEnumProp->Next(1, &guidProp, nullptr) == S_OK)
             {
                 if (!IsEqualGUID(guidProp, GUID_PROP_ATTRIBUTE))
                 {

@@ -1,5 +1,7 @@
 DIRS=\
+     staging \
      buffer \
+     audio \
      interactivity \
      host \
      propsheet \
@@ -8,6 +10,7 @@ DIRS=\
      server \
      terminal \
      testlist \
+     til \
      tools \
      tsf \
      types \

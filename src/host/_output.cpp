@@ -9,12 +9,9 @@
 #include "handle.h"
 #include "misc.h"
 
-#include "../buffer/out/CharRow.hpp"
-
 #include "../interactivity/inc/ServiceLocator.hpp"
 #include "../types/inc/Viewport.hpp"
 #include "../types/inc/convert.hpp"
-#include "../types/inc/Utf16Parser.hpp"
 
 #include <algorithm>
 #include <iterator>
@@ -34,7 +31,7 @@ using Microsoft::Console::Interactivity::ServiceLocator;
 void WriteToScreen(SCREEN_INFORMATION& screenInfo, const Viewport& region)
 {
     DBGOUTPUT(("WriteToScreen\n"));
-    const CONSOLE_INFORMATION& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
     // update to screen, if we're not iconic.
     if (!screenInfo.IsActiveScreenBuffer() || WI_IsFlagSet(gci.Flags, CONSOLE_IS_ICONIC))
     {
@@ -69,8 +66,8 @@ void WriteToScreen(SCREEN_INFORMATION& screenInfo, const Viewport& region)
 // Return Value:
 // - S_OK, E_INVALIDARG or similar HRESULT error.
 [[nodiscard]] HRESULT ApiRoutines::WriteConsoleOutputAttributeImpl(IConsoleOutputObject& OutContext,
-                                                                   const std::basic_string_view<WORD> attrs,
-                                                                   const COORD target,
+                                                                   const gsl::span<const WORD> attrs,
+                                                                   const til::point target,
                                                                    size_t& used) noexcept
 {
     // Set used to 0 from the beginning in case we exit early.
@@ -91,7 +88,7 @@ void WriteToScreen(SCREEN_INFORMATION& screenInfo, const Viewport& region)
         return E_INVALIDARG;
     }
 
-    const OutputCellIterator it(attrs, true);
+    const OutputCellIterator it(attrs);
     const auto done = screenInfo.Write(it, target);
 
     used = done.GetCellDistance(it);
@@ -110,7 +107,7 @@ void WriteToScreen(SCREEN_INFORMATION& screenInfo, const Viewport& region)
 // - S_OK, E_INVALIDARG or similar HRESULT error.
 [[nodiscard]] HRESULT ApiRoutines::WriteConsoleOutputCharacterWImpl(IConsoleOutputObject& OutContext,
                                                                     const std::wstring_view chars,
-                                                                    const COORD target,
+                                                                    const til::point target,
                                                                     size_t& used) noexcept
 {
     // Set used to 0 from the beginning in case we exit early.
@@ -153,7 +150,7 @@ void WriteToScreen(SCREEN_INFORMATION& screenInfo, const Viewport& region)
 // - S_OK, E_INVALIDARG or similar HRESULT error.
 [[nodiscard]] HRESULT ApiRoutines::WriteConsoleOutputCharacterAImpl(IConsoleOutputObject& OutContext,
                                                                     const std::string_view chars,
-                                                                    const COORD target,
+                                                                    const til::point target,
                                                                     size_t& used) noexcept
 {
     // Set used to 0 from the beginning in case we exit early.
@@ -173,7 +170,7 @@ void WriteToScreen(SCREEN_INFORMATION& screenInfo, const Viewport& region)
         std::wstring_view writtenView(wideChars);
         writtenView = writtenView.substr(0, wideCharsWritten);
 
-        // Look over written wide chars to find equilalent count of ascii chars so we can properly report back
+        // Look over written wide chars to find equivalent count of ascii chars so we can properly report back
         // how many elements were actually written
         used = GetALengthFromW(codepage, writtenView);
     }
@@ -195,7 +192,7 @@ void WriteToScreen(SCREEN_INFORMATION& screenInfo, const Viewport& region)
 [[nodiscard]] HRESULT ApiRoutines::FillConsoleOutputAttributeImpl(IConsoleOutputObject& OutContext,
                                                                   const WORD attribute,
                                                                   const size_t lengthToWrite,
-                                                                  const COORD startingCoordinate,
+                                                                  const til::point startingCoordinate,
                                                                   size_t& cellsModified) noexcept
 {
     // Set modified cells to 0 from the beginning.
@@ -221,13 +218,17 @@ void WriteToScreen(SCREEN_INFORMATION& screenInfo, const Viewport& region)
         TextAttribute useThisAttr(attribute);
         const OutputCellIterator it(useThisAttr, lengthToWrite);
         const auto done = screenBuffer.Write(it, startingCoordinate);
+        const auto cellsModifiedCoord = done.GetCellDistance(it);
 
-        cellsModified = done.GetCellDistance(it);
+        cellsModified = cellsModifiedCoord;
 
-        // Notify accessibility
-        auto endingCoordinate = startingCoordinate;
-        bufferSize.MoveInBounds(cellsModified, endingCoordinate);
-        screenBuffer.NotifyAccessibilityEventing(startingCoordinate.X, startingCoordinate.Y, endingCoordinate.X, endingCoordinate.Y);
+        if (screenBuffer.HasAccessibilityEventing())
+        {
+            // Notify accessibility
+            auto endingCoordinate = startingCoordinate;
+            bufferSize.MoveInBounds(cellsModifiedCoord, endingCoordinate);
+            screenBuffer.NotifyAccessibilityEventing(startingCoordinate.x, startingCoordinate.y, endingCoordinate.x, endingCoordinate.y);
+        }
     }
     CATCH_RETURN();
 
@@ -242,13 +243,17 @@ void WriteToScreen(SCREEN_INFORMATION& screenInfo, const Viewport& region)
 // - lengthToWrite - the number of elements to write
 // - startingCoordinate - Screen buffer coordinate to begin writing to.
 // - cellsModified - the number of elements written
+// - enablePowershellShim - true iff the client process that's calling this
+//   method is "powershell.exe". Used to enable certain compatibility shims for
+//   conpty mode. See GH#3126.
 // Return Value:
 // - S_OK or suitable HRESULT code from failure to write (memory issues, invalid arg, etc.)
 [[nodiscard]] HRESULT ApiRoutines::FillConsoleOutputCharacterWImpl(IConsoleOutputObject& OutContext,
                                                                    const wchar_t character,
                                                                    const size_t lengthToWrite,
-                                                                   const COORD startingCoordinate,
-                                                                   size_t& cellsModified) noexcept
+                                                                   const til::point startingCoordinate,
+                                                                   size_t& cellsModified,
+                                                                   const bool enablePowershellShim) noexcept
 {
     // Set modified cells to 0 from the beginning.
     cellsModified = 0;
@@ -269,6 +274,7 @@ void WriteToScreen(SCREEN_INFORMATION& screenInfo, const Viewport& region)
         return S_OK;
     }
 
+    auto hr = S_OK;
     try
     {
         const OutputCellIterator it(character, lengthToWrite);
@@ -276,16 +282,46 @@ void WriteToScreen(SCREEN_INFORMATION& screenInfo, const Viewport& region)
         // when writing to the buffer, specifically unset wrap if we get to the last column.
         // a fill operation should UNSET wrap in that scenario. See GH #1126 for more details.
         const auto done = screenInfo.Write(it, startingCoordinate, false);
-        cellsModified = done.GetInputDistance(it);
+        const auto cellsModifiedCoord = done.GetInputDistance(it);
+
+        cellsModified = cellsModifiedCoord;
 
         // Notify accessibility
-        auto endingCoordinate = startingCoordinate;
-        bufferSize.MoveInBounds(cellsModified, endingCoordinate);
-        screenInfo.NotifyAccessibilityEventing(startingCoordinate.X, startingCoordinate.Y, endingCoordinate.X, endingCoordinate.Y);
+        if (screenInfo.HasAccessibilityEventing())
+        {
+            auto endingCoordinate = startingCoordinate;
+            bufferSize.MoveInBounds(cellsModifiedCoord, endingCoordinate);
+            screenInfo.NotifyAccessibilityEventing(startingCoordinate.x, startingCoordinate.y, endingCoordinate.x, endingCoordinate.y);
+        }
+
+        // GH#3126 - This is a shim for powershell's `Clear-Host` function. In
+        // the vintage console, `Clear-Host` is supposed to clear the entire
+        // buffer. In conpty however, there's no difference between the viewport
+        // and the entirety of the buffer. We're going to see if this API call
+        // exactly matched the way we expect powershell to call it. If it does,
+        // then let's manually emit a ^[[3J to the connected terminal, so that
+        // their entire buffer will be cleared as well.
+        auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+        if (enablePowershellShim && gci.IsInVtIoMode())
+        {
+            const auto currentBufferDimensions{ screenInfo.GetBufferSize().Dimensions() };
+
+            const auto wroteWholeBuffer = lengthToWrite == (currentBufferDimensions.area<size_t>());
+            const auto startedAtOrigin = startingCoordinate == til::point{ 0, 0 };
+            const auto wroteSpaces = character == UNICODE_SPACE;
+
+            if (wroteWholeBuffer && startedAtOrigin && wroteSpaces)
+            {
+                // It's important that we flush the renderer at this point so we don't
+                // have any pending output rendered after the scrollback is cleared.
+                ServiceLocator::LocateGlobals().pRender->TriggerFlush(false);
+                hr = gci.GetVtIo()->ManuallyClearScrollback();
+            }
+        }
     }
     CATCH_RETURN();
 
-    return S_OK;
+    return hr;
 }
 
 // Routine Description:
@@ -301,9 +337,13 @@ void WriteToScreen(SCREEN_INFORMATION& screenInfo, const Viewport& region)
 [[nodiscard]] HRESULT ApiRoutines::FillConsoleOutputCharacterAImpl(IConsoleOutputObject& OutContext,
                                                                    const char character,
                                                                    const size_t lengthToWrite,
-                                                                   const COORD startingCoordinate,
+                                                                   const til::point startingCoordinate,
                                                                    size_t& cellsModified) noexcept
+try
 {
+    // In case ConvertToW throws causing an early return, set modified cells to 0.
+    cellsModified = 0;
+
     const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
 
     // convert to wide chars and call W version
@@ -313,3 +353,4 @@ void WriteToScreen(SCREEN_INFORMATION& screenInfo, const Viewport& region)
 
     return FillConsoleOutputCharacterWImpl(OutContext, wchs.at(0), lengthToWrite, startingCoordinate, cellsModified);
 }
+CATCH_RETURN()

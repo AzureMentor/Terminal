@@ -3,6 +3,10 @@
 
 #pragma once
 
+#ifdef __INSIDE_WINDOWS
+
+#define NOMINMAX
+
 #include <nt.h>
 #include <ntrtl.h>
 #include <nturtl.h>
@@ -13,4 +17,10 @@
 #include <sysparamsext.h>
 
 #define _DDK_INCLUDED
-#include "..\..\host\precomp.h"
+#include "../../host/precomp.h"
+
+#else
+
+#include "../../host/precomp.h"
+
+#endif

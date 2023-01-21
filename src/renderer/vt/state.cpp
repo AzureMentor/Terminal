@@ -4,11 +4,11 @@
 #include "precomp.h"
 #include "vtrenderer.hpp"
 #include "../../inc/conattrs.hpp"
-#include "../../types/inc/convert.hpp"
+#include "../../host/VtIo.hpp"
 
 // For _vcprintf
 #include <conio.h>
-#include <stdarg.h>
+#include <cstdarg>
 
 #pragma hdrstop
 
@@ -16,7 +16,7 @@ using namespace Microsoft::Console;
 using namespace Microsoft::Console::Render;
 using namespace Microsoft::Console::Types;
 
-const COORD VtEngine::INVALID_COORDS = { -1, -1 };
+constexpr til::point VtEngine::INVALID_COORDS = { -1, -1 };
 
 // Routine Description:
 // - Creates a new VT-based rendering engine
@@ -26,20 +26,17 @@ const COORD VtEngine::INVALID_COORDS = { -1, -1 };
 // Return Value:
 // - An instance of a Renderer.
 VtEngine::VtEngine(_In_ wil::unique_hfile pipe,
-                   const IDefaultColorProvider& colorProvider,
                    const Viewport initialViewport) :
     RenderEngineBase(),
     _hFile(std::move(pipe)),
-    _colorProvider(colorProvider),
-    _LastFG(INVALID_COLOR),
-    _LastBG(INVALID_COLOR),
-    _lastWasBold(false),
+    _usingLineRenditions(false),
+    _stopUsingLineRenditions(false),
+    _usingSoftFont(false),
+    _lastTextAttributes(INVALID_COLOR, INVALID_COLOR),
     _lastViewport(initialViewport),
-    _invalidRect(Viewport::Empty()),
-    _fInvalidRectUsed(false),
-    _lastRealCursor({ 0 }),
-    _lastText({ 0 }),
-    _scrollDelta({ 0 }),
+    _pool(til::pmr::get_default_resource()),
+    _invalidMap(initialViewport.Dimensions(), false, &_pool),
+    _scrollDelta(0, 0),
     _quickReturn(false),
     _clearedAllThisFrame(false),
     _cursorMoved(false),
@@ -49,22 +46,57 @@ VtEngine::VtEngine(_In_ wil::unique_hfile pipe,
     _circled(false),
     _firstPaint(true),
     _skipCursor(false),
-    _pipeBroken(false),
     _exitResult{ S_OK },
     _terminalOwner{ nullptr },
     _newBottomLine{ false },
     _deferredCursorPos{ INVALID_COORDS },
     _inResizeRequest{ false },
-    _trace{}
+    _trace{},
+    _bufferLine{},
+    _buffer{},
+    _formatBuffer{},
+    _conversionBuffer{},
+    _pfnSetLookingForDSR{}
 {
 #ifndef UNIT_TESTING
     // When unit testing, we can instantiate a VtEngine without a pipe.
-    THROW_HR_IF(E_HANDLE, _hFile.get() == INVALID_HANDLE_VALUE);
+    THROW_HR_IF(E_HANDLE, !_hFile);
 #else
     // member is only defined when UNIT_TESTING is.
     _usingTestCallback = false;
 #endif
 }
+
+// Method Description:
+// - Writes a fill of characters to our file handle (repeat of same character over and over)
+[[nodiscard]] HRESULT VtEngine::_WriteFill(const size_t n, const char c) noexcept
+try
+{
+    _trace.TraceStringFill(n, c);
+#ifdef UNIT_TESTING
+    if (_usingTestCallback)
+    {
+        const std::string str(n, c);
+        // Try to get the last error. If that wasn't set, then the test probably
+        // doesn't set last error. No matter. We'll just return with E_FAIL
+        // then. This is a unit test, we don't particularly care.
+        const auto succeeded = _pfnTestCallback(str.data(), str.size());
+        auto hr = E_FAIL;
+        if (!succeeded)
+        {
+            const auto err = ::GetLastError();
+            // If there wasn't an error in GLE, just use E_FAIL
+            hr = SUCCEEDED_WIN32(err) ? hr : HRESULT_FROM_WIN32(err);
+        }
+        return succeeded ? S_OK : hr;
+    }
+#endif
+
+    // TODO GH10001: Replace me with REP
+    _buffer.append(n, c);
+    return S_OK;
+}
+CATCH_RETURN();
 
 // Method Description:
 // - Writes the characters to our file handle. If we're building the unit tests,
@@ -80,8 +112,18 @@ VtEngine::VtEngine(_In_ wil::unique_hfile pipe,
 #ifdef UNIT_TESTING
     if (_usingTestCallback)
     {
-        RETURN_LAST_ERROR_IF(!_pfnTestCallback(str.data(), str.size()));
-        return S_OK;
+        // Try to get the last error. If that wasn't set, then the test probably
+        // doesn't set last error. No matter. We'll just return with E_FAIL
+        // then. This is a unit test, we don't particularly care.
+        const auto succeeded = _pfnTestCallback(str.data(), str.size());
+        auto hr = E_FAIL;
+        if (!succeeded)
+        {
+            const auto err = ::GetLastError();
+            // If there wasn't an error in GLE, just use E_FAIL
+            hr = SUCCEEDED_WIN32(err) ? hr : HRESULT_FROM_WIN32(err);
+        }
+        return succeeded ? S_OK : hr;
     }
 #endif
 
@@ -96,22 +138,14 @@ VtEngine::VtEngine(_In_ wil::unique_hfile pipe,
 
 [[nodiscard]] HRESULT VtEngine::_Flush() noexcept
 {
-#ifdef UNIT_TESTING
-    if (_hFile.get() == INVALID_HANDLE_VALUE)
+    if (_hFile)
     {
-        // Do not flush during Unit Testing because we won't have a valid file.
-        return S_OK;
-    }
-#endif
-
-    if (!_pipeBroken)
-    {
-        bool fSuccess = !!WriteFile(_hFile.get(), _buffer.data(), static_cast<DWORD>(_buffer.size()), nullptr, nullptr);
+        auto fSuccess = !!WriteFile(_hFile.get(), _buffer.data(), gsl::narrow_cast<DWORD>(_buffer.size()), nullptr, nullptr);
         _buffer.clear();
         if (!fSuccess)
         {
             _exitResult = HRESULT_FROM_WIN32(GetLastError());
-            _pipeBroken = true;
+            _hFile.reset();
             if (_terminalOwner)
             {
                 _terminalOwner->CloseOutput();
@@ -124,8 +158,8 @@ VtEngine::VtEngine(_In_ wil::unique_hfile pipe,
 }
 
 // Method Description:
-// - Wrapper for ITerminalOutputConnection. See _Write.
-[[nodiscard]] HRESULT VtEngine::WriteTerminalUtf8(const std::string& str) noexcept
+// - Wrapper for _Write.
+[[nodiscard]] HRESULT VtEngine::WriteTerminalUtf8(const std::string_view str) noexcept
 {
     return _Write(str);
 }
@@ -137,29 +171,23 @@ VtEngine::VtEngine(_In_ wil::unique_hfile pipe,
 // - wstr - wstring of text to be written
 // Return Value:
 // - S_OK or suitable HRESULT error from either conversion or writing pipe.
-[[nodiscard]] HRESULT VtEngine::_WriteTerminalUtf8(const std::wstring& wstr) noexcept
+[[nodiscard]] HRESULT VtEngine::_WriteTerminalUtf8(const std::wstring_view wstr) noexcept
 {
-    try
-    {
-        const auto converted = ConvertToA(CP_UTF8, wstr);
-        return _Write(converted);
-    }
-    CATCH_RETURN();
+    RETURN_IF_FAILED(til::u16u8(wstr, _conversionBuffer));
+    return _Write(_conversionBuffer);
 }
 
 // Method Description:
 // - Writes a wstring to the tty, encoded as "utf-8" where characters that are
 //      outside the ASCII range are encoded as '?'
-//   This mainly exists to maintain compatability with the inbox telnet client.
+//   This mainly exists to maintain compatibility with the inbox telnet client.
 //   This is one implementation of the WriteTerminalW method.
 // Arguments:
 // - wstr - wstring of text to be written
 // Return Value:
 // - S_OK or suitable HRESULT error from writing pipe.
-[[nodiscard]] HRESULT VtEngine::_WriteTerminalAscii(const std::wstring& wstr) noexcept
+[[nodiscard]] HRESULT VtEngine::_WriteTerminalAscii(const std::wstring_view wstr) noexcept
 {
-    const size_t cchActual = wstr.length();
-
     std::string needed;
     needed.reserve(wstr.size());
 
@@ -174,37 +202,27 @@ VtEngine::VtEngine(_In_ wil::unique_hfile pipe,
 }
 
 // Method Description:
-// - Helper for calling _Write with a string for formatting a sequence. Used
-//      extensively by VtSequences.cpp
+// - Writes a wstring to the tty when the characters are from the DRCS soft font.
+//       It is assumed that the character set has already been designated in the
+//       client terminal, so we just need to re-map our internal representation
+//       of the characters into ASCII.
 // Arguments:
-// - pFormat: the pointer to the string to write to the pipe.
-// - ...: a va_list of args to format the string with.
+// - wstr - wstring of text to be written
 // Return Value:
-// - S_OK, E_INVALIDARG for a invalid format string, or suitable HRESULT error
-//      from writing pipe.
-[[nodiscard]] HRESULT VtEngine::_WriteFormattedString(const std::string* const pFormat, ...) noexcept
+// - S_OK or suitable HRESULT error from writing pipe.
+[[nodiscard]] HRESULT VtEngine::_WriteTerminalDrcs(const std::wstring_view wstr) noexcept
 {
-    HRESULT hr = E_FAIL;
-    va_list argList;
-    va_start(argList, pFormat);
+    std::string needed;
+    needed.reserve(wstr.size());
 
-    int cchNeeded = _scprintf(pFormat->c_str(), argList);
-    // -1 is the _scprintf error case https://msdn.microsoft.com/en-us/library/t32cf9tb.aspx
-    if (cchNeeded > -1)
+    for (const auto& wch : wstr)
     {
-        wistd::unique_ptr<char[]> psz = wil::make_unique_nothrow<char[]>(cchNeeded + 1);
-        RETURN_IF_NULL_ALLOC(psz);
-
-        int cchWritten = _vsnprintf_s(psz.get(), cchNeeded + 1, cchNeeded, pFormat->c_str(), argList);
-        hr = _Write({ psz.get(), gsl::narrow<size_t>(cchWritten) });
-    }
-    else
-    {
-        hr = E_INVALIDARG;
+        // Our DRCS characters use the range U+EF20 to U+EF7F from the Unicode
+        // Private Use Area. To map them back to ASCII we just mask with 7F.
+        needed.push_back(wch & 0x7F);
     }
 
-    va_end(argList);
-    return hr;
+    return _Write(needed);
 }
 
 // Method Description:
@@ -242,21 +260,45 @@ VtEngine::VtEngine(_In_ wil::unique_hfile pipe,
 // - srNewViewport - The bounds of the new viewport.
 // Return Value:
 // - HRESULT S_OK
-[[nodiscard]] HRESULT VtEngine::UpdateViewport(const SMALL_RECT srNewViewport) noexcept
+[[nodiscard]] HRESULT VtEngine::UpdateViewport(const til::inclusive_rect& srNewViewport) noexcept
 {
-    HRESULT hr = S_OK;
-    const Viewport oldView = _lastViewport;
-    const Viewport newView = Viewport::FromInclusive(srNewViewport);
+    auto hr = S_OK;
+    const auto newView = Viewport::FromInclusive(srNewViewport);
+    const auto oldSize = _lastViewport.Dimensions();
+    const auto newSize = newView.Dimensions();
 
-    _lastViewport = newView;
-
-    if ((oldView.Height() != newView.Height()) || (oldView.Width() != newView.Width()))
+    if (oldSize != newSize)
     {
         // Don't emit a resize event if we've requested it be suppressed
         if (!_suppressResizeRepaint)
         {
-            hr = _ResizeWindow(newView.Width(), newView.Height());
+            hr = _ResizeWindow(newSize.width, newSize.height);
         }
+
+        if (_resizeQuirk)
+        {
+            // GH#3490 - When the viewport width changed, don't do anything extra here.
+            // If the buffer had areas that were invalid due to the resize, then the
+            // buffer will have triggered its own invalidations for what it knows is
+            // invalid. Previously, we'd invalidate everything if the width changed,
+            // because we couldn't be sure if lines were reflowed.
+            _invalidMap.resize(newSize);
+        }
+        else
+        {
+            if (SUCCEEDED(hr))
+            {
+                _invalidMap.resize(newSize, true); // resize while filling in new space with repaint requests.
+
+                // Viewport is smaller now - just update it all.
+                if (oldSize.height > newSize.height || oldSize.width > newSize.width)
+                {
+                    hr = InvalidateAll();
+                }
+            }
+        }
+
+        _resized = true;
     }
 
     // See MSFT:19408543
@@ -267,40 +309,8 @@ VtEngine::VtEngine(_In_ wil::unique_hfile pipe,
     // If we only clear the flag when the new viewport is different, this can
     //      lead to the first _actual_ resize being suppressed.
     _suppressResizeRepaint = false;
+    _lastViewport = newView;
 
-    if (SUCCEEDED(hr))
-    {
-        // Viewport is smaller now - just update it all.
-        if (oldView.Height() > newView.Height() || oldView.Width() > newView.Width())
-        {
-            hr = InvalidateAll();
-        }
-        else
-        {
-            // At least one of the directions grew.
-            // First try and add everything to the right of the old viewport,
-            //      then everything below where the old viewport ended.
-            if (oldView.Width() < newView.Width())
-            {
-                short left = oldView.RightExclusive();
-                short top = 0;
-                short right = newView.RightInclusive();
-                short bottom = oldView.BottomInclusive();
-                Viewport rightOfOldViewport = Viewport::FromInclusive({ left, top, right, bottom });
-                hr = _InvalidCombine(rightOfOldViewport);
-            }
-            if (SUCCEEDED(hr) && oldView.Height() < newView.Height())
-            {
-                short left = 0;
-                short top = oldView.BottomExclusive();
-                short right = newView.RightInclusive();
-                short bottom = newView.BottomInclusive();
-                Viewport belowOldViewport = Viewport::FromInclusive({ left, top, right, bottom });
-                hr = _InvalidCombine(belowOldViewport);
-            }
-        }
-    }
-    _resized = true;
     return hr;
 }
 
@@ -326,12 +336,12 @@ VtEngine::VtEngine(_In_ wil::unique_hfile pipe,
 // Method Description:
 // - Retrieves the current pixel size of the font we have selected for drawing.
 // Arguments:
-// - pFontSize - recieves the current X by Y size of the font.
+// - pFontSize - receives the current X by Y size of the font.
 // Return Value:
 // - S_FALSE: This is unsupported by the VT Renderer and should use another engine's value.
-[[nodiscard]] HRESULT VtEngine::GetFontSize(_Out_ COORD* const pFontSize) noexcept
+[[nodiscard]] HRESULT VtEngine::GetFontSize(_Out_ til::size* const pFontSize) noexcept
 {
-    *pFontSize = COORD({ 1, 1 });
+    *pFontSize = { 1, 1 };
     return S_FALSE;
 }
 
@@ -363,7 +373,7 @@ void VtEngine::SetTestCallback(_In_ std::function<bool(const char* const, size_t
 // - true if the entire viewport has been invalidated
 bool VtEngine::_AllIsInvalid() const
 {
-    return _lastViewport == _invalidRect;
+    return _invalidMap.all();
 }
 
 // Method Description:
@@ -389,9 +399,9 @@ bool VtEngine::_AllIsInvalid() const
 // - coordCursor: The cursor position to inherit from.
 // Return Value:
 // - S_OK
-[[nodiscard]] HRESULT VtEngine::InheritCursor(const COORD coordCursor) noexcept
+[[nodiscard]] HRESULT VtEngine::InheritCursor(const til::point coordCursor) noexcept
 {
-    _virtualTop = coordCursor.Y;
+    _virtualTop = coordCursor.y;
     _lastText = coordCursor;
     _skipCursor = true;
     // Prevent us from clearing the entire viewport on the first paint
@@ -399,7 +409,7 @@ bool VtEngine::_AllIsInvalid() const
     return S_OK;
 }
 
-void VtEngine::SetTerminalOwner(Microsoft::Console::ITerminalOwner* const terminalOwner)
+void VtEngine::SetTerminalOwner(Microsoft::Console::VirtualTerminal::VtIo* const terminalOwner)
 {
     _terminalOwner = terminalOwner;
 }
@@ -416,6 +426,23 @@ HRESULT VtEngine::RequestCursor() noexcept
 {
     RETURN_IF_FAILED(_RequestCursor());
     RETURN_IF_FAILED(_Flush());
+    return S_OK;
+}
+
+// Method Description:
+// - Sends a notification through to the `VtInputThread` that it should
+//   watch for and capture the response from a DSR message we're about to send.
+//   This is typically `RequestCursor` at the time of writing this, but in theory
+//   could be another DSR as well.
+// Arguments:
+// - <none>
+// Return Value:
+// - S_OK if all goes well. Invalid state error if no notification function is installed.
+//   (see `SetLookingForDSRCallback` to install one.)
+[[nodiscard]] HRESULT VtEngine::_ListenForDSR() noexcept
+{
+    RETURN_HR_IF(HRESULT_FROM_WIN32(ERROR_INVALID_STATE), !_pfnSetLookingForDSR);
+    _pfnSetLookingForDSR(true);
     return S_OK;
 }
 
@@ -445,4 +472,84 @@ void VtEngine::BeginResizeRequest()
 void VtEngine::EndResizeRequest()
 {
     _inResizeRequest = false;
+}
+
+// Method Description:
+// - Configure the renderer for the resize quirk. This changes the behavior of
+//   conpty to _not_ InvalidateAll the entire viewport on a resize operation.
+//   This is used by the Windows Terminal, because it is prepared to be
+//   connected to a conpty, and handles its own buffer specifically for a
+//   conpty scenario.
+// - See also: GH#3490, #4354, #4741
+// Arguments:
+// - resizeQuirk - True to turn on the quirk. False otherwise.
+// Return Value:
+// - true iff we were started with the `--resizeQuirk` flag enabled.
+void VtEngine::SetResizeQuirk(const bool resizeQuirk)
+{
+    _resizeQuirk = resizeQuirk;
+}
+
+// Method Description:
+// - Configure the renderer to understand that we're operating in limited-draw
+//   passthrough mode. We do not need to handle full responsibility for replicating
+//   buffer state to the attached terminal.
+// Arguments:
+// - passthrough - True to turn on passthrough mode. False otherwise.
+// Return Value:
+// - true iff we were started with an output mode for passthrough. false otherwise.
+void VtEngine::SetPassthroughMode(const bool passthrough) noexcept
+{
+    _passthrough = passthrough;
+}
+
+void VtEngine::SetLookingForDSRCallback(std::function<void(bool)> pfnLooking) noexcept
+{
+    _pfnSetLookingForDSR = pfnLooking;
+}
+
+void VtEngine::SetTerminalCursorTextPosition(const til::point cursor) noexcept
+{
+    _lastText = cursor;
+}
+
+// Method Description:
+// - Manually emit a "Erase Scrollback" sequence to the connected terminal. We
+//   need to do this in certain cases that we've identified where we believe the
+//   client wanted the entire terminal buffer cleared, not just the viewport.
+//   For more information, see GH#3126.
+// - This is unimplemented in the win-telnet, xterm-ascii renderers - inbox
+//   telnet.exe doesn't know how to handle a ^[[3J. This _is_ implemented in the
+//   Xterm256Engine.
+// Arguments:
+// - <none>
+// Return Value:
+// - S_OK if we wrote the sequences successfully, otherwise an appropriate HRESULT
+[[nodiscard]] HRESULT VtEngine::ManuallyClearScrollback() noexcept
+{
+    return S_OK;
+}
+
+// Method Description:
+// - Send a sequence to the connected terminal to request win32-input-mode from
+//   them. This will enable the connected terminal to send us full INPUT_RECORDs
+//   as input. If the terminal doesn't understand this sequence, it'll just
+//   ignore it.
+// Arguments:
+// - <none>
+// Return Value:
+// - S_OK if we succeeded, else an appropriate HRESULT for failing to allocate or write.
+HRESULT VtEngine::RequestWin32Input() noexcept
+{
+    RETURN_IF_FAILED(_RequestWin32Input());
+    RETURN_IF_FAILED(_RequestFocusEventMode());
+    RETURN_IF_FAILED(_Flush());
+    return S_OK;
+}
+
+HRESULT VtEngine::SwitchScreenBuffer(const bool useAltBuffer) noexcept
+{
+    RETURN_IF_FAILED(_SwitchScreenBuffer(useAltBuffer));
+    RETURN_IF_FAILED(_Flush());
+    return S_OK;
 }

@@ -67,7 +67,7 @@ void ShortcutSerialization::s_SetLinkPropertyDwordValue(_Inout_ IPropertyStore* 
                                                                     _Out_ BOOL* const pfValue)
 {
     PROPVARIANT propvar;
-    HRESULT hr = pPropStore->GetValue(refPropKey, &propvar);
+    auto hr = pPropStore->GetValue(refPropKey, &propvar);
     // Only retrieve the value if we actually found one. If the link didn't have
     //      the property (eg a new property was added_, then ignore it.
     if (SUCCEEDED(hr) && propvar.vt != VT_EMPTY)
@@ -83,7 +83,7 @@ void ShortcutSerialization::s_SetLinkPropertyDwordValue(_Inout_ IPropertyStore* 
                                                                     _Out_ BYTE* const pbValue)
 {
     PROPVARIANT propvar;
-    HRESULT hr = pPropStore->GetValue(refPropKey, &propvar);
+    auto hr = pPropStore->GetValue(refPropKey, &propvar);
     // Only retrieve the value if we actually found one. If the link didn't have
     //      the property (eg a new property was added_, then ignore it.
     if (SUCCEEDED(hr) && propvar.vt != VT_EMPTY)
@@ -108,7 +108,7 @@ void ShortcutSerialization::s_SetLinkPropertyDwordValue(_Inout_ IPropertyStore* 
                                                                      _Out_ DWORD* const pdwValue)
 {
     PROPVARIANT propvar;
-    HRESULT hr = pPropStore->GetValue(refPropKey, &propvar);
+    auto hr = pPropStore->GetValue(refPropKey, &propvar);
     // Only retrieve the value if we actually found one. If the link didn't have
     //      the property (eg a new property was added_, then ignore it.
     if (SUCCEEDED(hr) && propvar.vt != VT_EMPTY)
@@ -128,7 +128,7 @@ void ShortcutSerialization::s_SetLinkPropertyDwordValue(_Inout_ IPropertyStore* 
                                                                     _In_ PCONSOLE_STATE_INFO pStateInfo)
 {
     IShellLinkDataList* pConsoleLnkDataList;
-    HRESULT hr = pslConsole->QueryInterface(IID_PPV_ARGS(&pConsoleLnkDataList));
+    auto hr = pslConsole->QueryInterface(IID_PPV_ARGS(&pConsoleLnkDataList));
     if (SUCCEEDED(hr))
     {
         // get/apply standard console properties
@@ -180,7 +180,7 @@ void ShortcutSerialization::s_SetLinkPropertyDwordValue(_Inout_ IPropertyStore* 
                                                                     _In_ PCONSOLE_STATE_INFO pStateInfo)
 {
     IPropertyStore* pPropStoreLnk;
-    HRESULT hr = pslConsole->QueryInterface(IID_PPV_ARGS(&pPropStoreLnk));
+    auto hr = pslConsole->QueryInterface(IID_PPV_ARGS(&pPropStoreLnk));
     if (SUCCEEDED(hr))
     {
         hr = s_GetPropertyBoolValue(pPropStoreLnk, PKEY_Console_WrapText, &pStateInfo->fWrapText);
@@ -242,7 +242,7 @@ void ShortcutSerialization::s_GetLinkTitle(_In_ PCWSTR pwszShortcutFilename,
                                            _Out_writes_(cchShortcutTitle) PWSTR pwszShortcutTitle,
                                            const size_t cchShortcutTitle)
 {
-    NTSTATUS Status = (cchShortcutTitle > 0) ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER_2;
+    auto Status = (cchShortcutTitle > 0) ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER_2;
     if (NT_SUCCESS(Status))
     {
         pwszShortcutTitle[0] = L'\0';
@@ -253,7 +253,7 @@ void ShortcutSerialization::s_GetLinkTitle(_In_ PCWSTR pwszShortcutFilename,
         {
             // Now load the localized title for the shortcut
             IShellItem* psi;
-            HRESULT hrShellItem = SHCreateItemFromParsingName(pwszShortcutFilename, nullptr, IID_PPV_ARGS(&psi));
+            auto hrShellItem = SHCreateItemFromParsingName(pwszShortcutFilename, nullptr, IID_PPV_ARGS(&psi));
             if (SUCCEEDED(hrShellItem))
             {
                 PWSTR pwszShortcutDisplayName;
@@ -290,7 +290,7 @@ void ShortcutSerialization::s_GetLinkTitle(_In_ PCWSTR pwszShortcutFilename,
     *ppsl = nullptr;
     *ppPf = nullptr;
     IShellLink* psl;
-    HRESULT hr = SHCoCreateInstance(NULL, &CLSID_ShellLink, NULL, IID_PPV_ARGS(&psl));
+    auto hr = SHCoCreateInstance(nullptr, &CLSID_ShellLink, nullptr, IID_PPV_ARGS(&psl));
     if (SUCCEEDED(hr))
     {
         IPersistFile* pPf;
@@ -324,7 +324,7 @@ void ShortcutSerialization::s_GetLinkTitle(_In_ PCWSTR pwszShortcutFilename,
 {
     IShellLink* psl;
     IPersistFile* ppf;
-    HRESULT hr = s_GetLoadedShellLinkForShortcut(pStateInfo->LinkTitle, STGM_READ, &psl, &ppf);
+    auto hr = s_GetLoadedShellLinkForShortcut(pStateInfo->LinkTitle, STGM_READ, &psl, &ppf);
     if (SUCCEEDED(hr))
     {
         hr = s_PopulateV1Properties(psl, pStateInfo);
@@ -344,6 +344,8 @@ void ShortcutSerialization::s_GetLinkTitle(_In_ PCWSTR pwszShortcutFilename,
                                                               _Out_ BOOL* const pfReadConsoleProperties,
                                                               _Out_writes_opt_(cchShortcutTitle) PWSTR pwszShortcutTitle,
                                                               const size_t cchShortcutTitle,
+                                                              _Out_writes_opt_(cchLinkTarget) PWSTR pwszLinkTarget,
+                                                              const size_t cchLinkTarget,
                                                               _Out_writes_opt_(cchIconLocation) PWSTR pwszIconLocation,
                                                               const size_t cchIconLocation,
                                                               _Out_opt_ int* const piIcon,
@@ -357,6 +359,11 @@ void ShortcutSerialization::s_GetLinkTitle(_In_ PCWSTR pwszShortcutFilename,
         pwszShortcutTitle[0] = L'\0';
     }
 
+    if (pwszLinkTarget && cchLinkTarget > 0)
+    {
+        pwszLinkTarget[0] = L'\0';
+    }
+
     if (pwszIconLocation && cchIconLocation > 0)
     {
         pwszIconLocation[0] = L'\0';
@@ -364,7 +371,7 @@ void ShortcutSerialization::s_GetLinkTitle(_In_ PCWSTR pwszShortcutFilename,
 
     IShellLink* psl;
     IPersistFile* ppf;
-    HRESULT hr = s_GetLoadedShellLinkForShortcut(pStateInfo->LinkTitle, STGM_READ, &psl, &ppf);
+    auto hr = s_GetLoadedShellLinkForShortcut(pStateInfo->LinkTitle, STGM_READ, &psl, &ppf);
     if (SUCCEEDED(hr))
     {
         // first, load non-console-specific shortcut properties, if requested
@@ -374,7 +381,12 @@ void ShortcutSerialization::s_GetLinkTitle(_In_ PCWSTR pwszShortcutFilename,
             s_GetLinkTitle(pStateInfo->LinkTitle, pwszShortcutTitle, cchShortcutTitle);
         }
 
-        if (pwszIconLocation && piIcon)
+        if (pwszLinkTarget)
+        {
+            hr = psl->GetPath(pwszLinkTarget, static_cast<int>(cchLinkTarget), NULL, 0);
+        }
+
+        if (SUCCEEDED(hr) && pwszIconLocation && piIcon)
         {
             hr = psl->GetIconLocation(pwszIconLocation, static_cast<int>(cchIconLocation), piIcon);
         }
@@ -395,7 +407,7 @@ void ShortcutSerialization::s_GetLinkTitle(_In_ PCWSTR pwszShortcutFilename,
             // here, since we've historically had two outcomes from this function -- we read generic shortcut
             // properties (above), and then more specific ones. if the specific ones fail, we still treat it
             // like a success so that we can continue to load.
-            HRESULT hrProps = s_PopulateV1Properties(psl, pStateInfo);
+            auto hrProps = s_PopulateV1Properties(psl, pStateInfo);
             if (SUCCEEDED(hrProps))
             {
                 *pfReadConsoleProperties = true;
@@ -425,7 +437,7 @@ void ShortcutSerialization::s_GetLinkTitle(_In_ PCWSTR pwszShortcutFilename,
 {
     IShellLinkW* psl;
     IPersistFile* ppf;
-    HRESULT hr = s_GetLoadedShellLinkForShortcut(pStateInfo->LinkTitle, STGM_READWRITE | STGM_SHARE_EXCLUSIVE, &psl, &ppf);
+    auto hr = s_GetLoadedShellLinkForShortcut(pStateInfo->LinkTitle, STGM_READWRITE | STGM_SHARE_EXCLUSIVE, &psl, &ppf);
     if (SUCCEEDED(hr))
     {
         IShellLinkDataList* psldl;
@@ -517,7 +529,7 @@ void ShortcutSerialization::s_GetLinkTitle(_In_ PCWSTR pwszShortcutFilename,
         if (SUCCEEDED(hr))
         {
             // Only persist changes if we've successfully made them.
-            hr = ppf->Save(NULL, TRUE);
+            hr = ppf->Save(nullptr, TRUE);
         }
 
         ppf->Release();

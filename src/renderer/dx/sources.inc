@@ -33,5 +33,10 @@ INCLUDES = \
 SOURCES = \
     $(SOURCES) \
     ..\DxRenderer.cpp \
+    ..\DxFontInfo.cpp \
+    ..\DxFontRenderData.cpp \
+    ..\DxSoftFont.cpp \
     ..\CustomTextRenderer.cpp \
     ..\CustomTextLayout.cpp \
+
+C_DEFINES=$(C_DEFINES) -D__INSIDE_WINDOWS

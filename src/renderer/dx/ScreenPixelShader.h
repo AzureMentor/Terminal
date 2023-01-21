@@ -1,11 +1,23 @@
 #pragma once
 
-const char screenPixelShaderString[] = R"(
+#if !TIL_FEATURE_DXENGINESHADERSUPPORT_ENABLED
+constexpr std::string_view retroPixelShaderString{ "" };
+#else
+constexpr std::string_view retroPixelShaderString{ R"(
+// The original retro pixel shader
 Texture2D shaderTexture;
 SamplerState samplerState;
 
+cbuffer PixelShaderSettings {
+  float  Time;
+  float  Scale;
+  float2 Resolution;
+  float4 Background;
+};
+
 #define SCANLINE_FACTOR 0.5
-#define SCANLINE_PERIOD 1
+#define SCALED_SCANLINE_PERIOD Scale
+#define SCALED_GAUSSIAN_SIGMA (2.0*Scale)
 
 static const float M_PI = 3.14159265f;
 
@@ -23,7 +35,6 @@ float4 Blur(Texture2D input, float2 tex_coord, float sigma)
     float texelHeight = 1.0f/height;
 
     float4 color = { 0, 0, 0, 0 };
-    float factor = 1;
 
     int sampleCount = 13;
 
@@ -46,7 +57,7 @@ float4 Blur(Texture2D input, float2 tex_coord, float sigma)
 
 float SquareWave(float y)
 {
-    return 1 - (floor(y / SCANLINE_PERIOD) % 2) * SCANLINE_FACTOR;
+    return 1 - (floor(y / SCALED_SCANLINE_PERIOD) % 2) * SCANLINE_FACTOR;
 }
 
 float4 Scanline(float4 color, float4 pos)
@@ -71,9 +82,10 @@ float4 main(float4 pos : SV_POSITION, float2 tex : TEXCOORD) : SV_TARGET
 
     // TODO:GH#3930 Make these configurable in some way.
     float4 color = input.Sample(samplerState, tex);
-    color += Blur(input, tex, 2)*0.3;
+    color += Blur(input, tex, SCALED_GAUSSIAN_SIGMA)*0.3;
     color = Scanline(color, pos);
 
     return color;
 }
-)";
+)" };
+#endif

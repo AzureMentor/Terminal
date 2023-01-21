@@ -10,6 +10,8 @@
 #include <wrl/client.h>
 #include <wrl/implements.h>
 
+#include "BoxDrawingEffect.h"
+#include "DxFontRenderData.h"
 #include "../inc/Cluster.hpp"
 
 namespace Microsoft::Console::Render
@@ -19,12 +21,11 @@ namespace Microsoft::Console::Render
     public:
         // Based on the Windows 7 SDK sample at https://github.com/pauldotknopf/WindowsSDK7-Samples/tree/master/multimedia/DirectWrite/CustomLayout
 
-        CustomTextLayout(gsl::not_null<IDWriteFactory1*> const factory,
-                         gsl::not_null<IDWriteTextAnalyzer1*> const analyzer,
-                         gsl::not_null<IDWriteTextFormat*> const format,
-                         gsl::not_null<IDWriteFontFace1*> const font,
-                         const std::basic_string_view<::Microsoft::Console::Render::Cluster> clusters,
-                         size_t const width);
+        CustomTextLayout(const gsl::not_null<DxFontRenderData*> fontRenderData);
+
+        [[nodiscard]] HRESULT STDMETHODCALLTYPE AppendClusters(const gsl::span<const ::Microsoft::Console::Render::Cluster> clusters);
+
+        [[nodiscard]] HRESULT STDMETHODCALLTYPE Reset() noexcept;
 
         [[nodiscard]] HRESULT STDMETHODCALLTYPE GetColumns(_Out_ UINT32* columns);
 
@@ -44,7 +45,7 @@ namespace Microsoft::Console::Render
         [[nodiscard]] DWRITE_READING_DIRECTION STDMETHODCALLTYPE GetParagraphReadingDirection() noexcept override;
         [[nodiscard]] HRESULT STDMETHODCALLTYPE GetLocaleName(UINT32 textPosition,
                                                               _Out_ UINT32* textLength,
-                                                              _Outptr_result_z_ WCHAR const** localeName) noexcept override;
+                                                              _Outptr_result_z_ const WCHAR** localeName) noexcept override;
         [[nodiscard]] HRESULT STDMETHODCALLTYPE GetNumberSubstitution(UINT32 textPosition,
                                                                       _Out_ UINT32* textLength,
                                                                       _COM_Outptr_ IDWriteNumberSubstitution** numberSubstitution) noexcept override;
@@ -52,7 +53,7 @@ namespace Microsoft::Console::Render
         // IDWriteTextAnalysisSink methods
         [[nodiscard]] HRESULT STDMETHODCALLTYPE SetScriptAnalysis(UINT32 textPosition,
                                                                   UINT32 textLength,
-                                                                  _In_ DWRITE_SCRIPT_ANALYSIS const* scriptAnalysis) override;
+                                                                  _In_ const DWRITE_SCRIPT_ANALYSIS* scriptAnalysis) override;
         [[nodiscard]] HRESULT STDMETHODCALLTYPE SetLineBreakpoints(UINT32 textPosition,
                                                                    UINT32 textLength,
                                                                    _In_reads_(textLength) DWRITE_LINE_BREAKPOINT const* lineBreakpoints) override;
@@ -78,7 +79,8 @@ namespace Microsoft::Console::Render
                 isNumberSubstituted(),
                 isSideways(),
                 fontFace{ nullptr },
-                fontScale{ 1.0 }
+                fontScale{ 1.0 },
+                drawingEffect{ nullptr }
             {
             }
 
@@ -92,6 +94,7 @@ namespace Microsoft::Console::Render
             bool isSideways;
             ::Microsoft::WRL::ComPtr<IDWriteFontFace1> fontFace;
             FLOAT fontScale;
+            ::Microsoft::WRL::ComPtr<IUnknown> drawingEffect;
 
             inline bool ContainsTextPosition(UINT32 desiredTextPosition) const noexcept
             {
@@ -117,34 +120,43 @@ namespace Microsoft::Console::Render
         };
 
         [[nodiscard]] LinkedRun& _FetchNextRun(UINT32& textLength);
+        [[nodiscard]] LinkedRun& _GetCurrentRun();
         void _SetCurrentRun(const UINT32 textPosition);
         void _SplitCurrentRun(const UINT32 splitPosition);
+        void _OrderRuns();
 
         [[nodiscard]] HRESULT STDMETHODCALLTYPE _AnalyzeFontFallback(IDWriteTextAnalysisSource* const source, UINT32 textPosition, UINT32 textLength);
-        [[nodiscard]] HRESULT STDMETHODCALLTYPE _SetMappedFont(UINT32 textPosition, UINT32 textLength, IDWriteFont* const font, FLOAT const scale);
+        [[nodiscard]] HRESULT STDMETHODCALLTYPE _SetMappedFontFace(UINT32 textPosition, UINT32 textLength, const ::Microsoft::WRL::ComPtr<IDWriteFontFace>& fontFace, FLOAT const scale);
 
+        [[nodiscard]] HRESULT STDMETHODCALLTYPE _AnalyzeBoxDrawing(const gsl::not_null<IDWriteTextAnalysisSource*> source, UINT32 textPosition, UINT32 textLength);
+        [[nodiscard]] HRESULT STDMETHODCALLTYPE _SetBoxEffect(UINT32 textPosition, UINT32 textLength);
+
+        [[nodiscard]] HRESULT _AnalyzeTextComplexity() noexcept;
         [[nodiscard]] HRESULT _AnalyzeRuns() noexcept;
         [[nodiscard]] HRESULT _ShapeGlyphRuns() noexcept;
         [[nodiscard]] HRESULT _ShapeGlyphRun(const UINT32 runIndex, UINT32& glyphStart) noexcept;
         [[nodiscard]] HRESULT _CorrectGlyphRuns() noexcept;
         [[nodiscard]] HRESULT _CorrectGlyphRun(const UINT32 runIndex) noexcept;
+        [[nodiscard]] HRESULT STDMETHODCALLTYPE _CorrectBoxDrawing() noexcept;
         [[nodiscard]] HRESULT _DrawGlyphRuns(_In_opt_ void* clientDrawingContext,
                                              IDWriteTextRenderer* renderer,
                                              const D2D_POINT_2F origin) noexcept;
+        [[nodiscard]] HRESULT _DrawGlyphRun(_In_opt_ void* clientDrawingContext,
+                                            gsl::not_null<IDWriteTextRenderer*> renderer,
+                                            D2D_POINT_2F& mutableOrigin,
+                                            const Run& run) noexcept;
 
         [[nodiscard]] static constexpr UINT32 _EstimateGlyphCount(const UINT32 textLength) noexcept;
 
     private:
-        const ::Microsoft::WRL::ComPtr<IDWriteFactory1> _factory;
+        // DirectWrite font render data
+        DxFontRenderData* _fontRenderData;
 
-        // DirectWrite analyzer
-        const ::Microsoft::WRL::ComPtr<IDWriteTextAnalyzer1> _analyzer;
+        // DirectWrite text formats
+        IDWriteTextFormat* _formatInUse;
 
-        // DirectWrite text format
-        const ::Microsoft::WRL::ComPtr<IDWriteTextFormat> _format;
-
-        // DirectWrite font face
-        const ::Microsoft::WRL::ComPtr<IDWriteFontFace1> _font;
+        // DirectWrite font faces
+        IDWriteFontFace1* _fontInUse;
 
         // The text we're analyzing and processing into a layout
         std::wstring _text;
@@ -164,9 +176,41 @@ namespace Microsoft::Console::Render
         UINT32 _runIndex;
 
         // Glyph shaping results
+
+        // Whether the entire text is determined to be simple and does not require full script shaping.
+        bool _isEntireTextSimple;
+
         std::vector<DWRITE_GLYPH_OFFSET> _glyphOffsets;
+
+        // Clusters are complicated. They're in respect to each individual run.
+        // The offsets listed here are in respect to the _text string, but from the beginning index of
+        // each run.
+        // That means if we have two runs, we will see 0 1 2 3 4 0 1 2 3 4 5 6 7... in this clusters count.
         std::vector<UINT16> _glyphClusters;
+
+        // This appears to be the index of the glyph inside each font.
         std::vector<UINT16> _glyphIndices;
+
+        // This is for calculating glyph advances when the entire text is simple.
+        std::vector<INT32> _glyphDesignUnitAdvances;
+
         std::vector<float> _glyphAdvances;
+
+        struct ScaleCorrection
+        {
+            UINT32 textIndex;
+            UINT32 textLength;
+            float scale;
+        };
+
+        // These are used to further break the runs apart and adjust the font size so glyphs fit inside the cells.
+        std::vector<ScaleCorrection> _glyphScaleCorrections;
+
+#ifdef UNIT_TESTING
+    public:
+        CustomTextLayout() = default;
+
+        friend class CustomTextLayoutTests;
+#endif
     };
 }
