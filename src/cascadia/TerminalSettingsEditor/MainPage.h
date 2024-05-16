@@ -46,10 +46,13 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
         Windows::Foundation::Collections::IObservableVector<IInspectable> Breadcrumbs() noexcept;
 
-        TYPED_EVENT(OpenJson, Windows::Foundation::IInspectable, Model::SettingsTarget);
+        til::typed_event<Windows::Foundation::IInspectable, Model::SettingsTarget> OpenJson;
 
     private:
         Windows::Foundation::Collections::IObservableVector<IInspectable> _breadcrumbs;
+        Windows::Foundation::Collections::IObservableVector<IInspectable> _menuItemSource;
+        size_t _originalNumItems = 0u;
+
         Model::CascadiaSettings _settingsSource;
         Model::CascadiaSettings _settingsClone;
 
@@ -68,6 +71,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         void _Navigate(const Editor::ProfileViewModel& profile, BreadcrumbSubPage subPage);
 
         void _UpdateBackgroundForMica();
+        void _MoveXamlParsedNavItemsIntoItemSource();
 
         winrt::Microsoft::Terminal::Settings::Editor::ColorSchemesPageViewModel _colorSchemesPageVM{ nullptr };
 

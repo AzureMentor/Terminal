@@ -44,18 +44,24 @@ public:
     bool ScrollDown(const VTInt /*distance*/) override { return false; } // SD
     bool InsertLine(const VTInt /*distance*/) override { return false; } // IL
     bool DeleteLine(const VTInt /*distance*/) override { return false; } // DL
+    bool InsertColumn(const VTInt /*distance*/) override { return false; } // DECIC
+    bool DeleteColumn(const VTInt /*distance*/) override { return false; } // DECDC
     bool SetKeypadMode(const bool /*applicationMode*/) override { return false; } // DECKPAM, DECKPNM
     bool SetAnsiMode(const bool /*ansiMode*/) override { return false; } // DECANM
     bool SetTopBottomScrollingMargins(const VTInt /*topMargin*/, const VTInt /*bottomMargin*/) override { return false; } // DECSTBM
+    bool SetLeftRightScrollingMargins(const VTInt /*leftMargin*/, const VTInt /*rightMargin*/) override { return false; } // DECSLRM
     bool WarningBell() override { return false; } // BEL
     bool CarriageReturn() override { return false; } // CR
     bool LineFeed(const DispatchTypes::LineFeedType /*lineFeedType*/) override { return false; } // IND, NEL, LF, FF, VT
     bool ReverseLineFeed() override { return false; } // RI
-    bool SetWindowTitle(std::wstring_view /*title*/) override { return false; } // OscWindowTitle
+    bool BackIndex() override { return false; } // DECBI
+    bool ForwardIndex() override { return false; } // DECFI
+    bool SetWindowTitle(std::wstring_view /*title*/) override { return false; } // DECSWT, OscWindowTitle
     bool HorizontalTabSet() override { return false; } // HTS
     bool ForwardTab(const VTInt /*numTabs*/) override { return false; } // CHT, HT
     bool BackwardsTab(const VTInt /*numTabs*/) override { return false; } // CBT
     bool TabClear(const DispatchTypes::TabClearType /*clearType*/) override { return false; } // TBC
+    bool TabSet(const VTParameter /*setType*/) override { return false; } // DECST8C
     bool SetColorTableEntry(const size_t /*tableIndex*/, const DWORD /*color*/) override { return false; } // OSCColorTable
     bool SetDefaultForeground(const DWORD /*color*/) override { return false; } // OSCDefaultForeground
     bool SetDefaultBackground(const DWORD /*color*/) override { return false; } // OSCDefaultBackground
@@ -74,6 +80,7 @@ public:
     bool EraseRectangularArea(const VTInt /*top*/, const VTInt /*left*/, const VTInt /*bottom*/, const VTInt /*right*/) override { return false; } // DECERA
     bool SelectiveEraseRectangularArea(const VTInt /*top*/, const VTInt /*left*/, const VTInt /*bottom*/, const VTInt /*right*/) override { return false; } // DECSERA
     bool SelectAttributeChangeExtent(const DispatchTypes::ChangeExtent /*changeExtent*/) override { return false; } // DECSACE
+    bool RequestChecksumRectangularArea(const VTInt /*id*/, const VTInt /*page*/, const VTInt /*top*/, const VTInt /*left*/, const VTInt /*bottom*/, const VTInt /*right*/) override { return false; } // DECRQCRA
 
     bool SetGraphicsRendition(const VTParameters /*options*/) override { return false; } // SGR
     bool SetLineRendition(const LineRendition /*rendition*/) override { return false; } // DECSWL, DECDWL, DECDHL
@@ -100,6 +107,7 @@ public:
     bool LockingShiftRight(const VTInt /*gsetNumber*/) override { return false; } // LS1R, LS2R, LS3R
     bool SingleShift(const VTInt /*gsetNumber*/) override { return false; } // SS2, SS3
     bool AcceptC1Controls(const bool /*enabled*/) override { return false; } // DECAC1
+    bool AnnounceCodeStructure(const VTInt /*ansiLevel*/) override { return false; } // ACS
 
     bool SoftReset() override { return false; } // DECSTR
     bool HardReset() override { return false; } // RIS
@@ -108,7 +116,7 @@ public:
     bool SetCursorStyle(const DispatchTypes::CursorStyle /*cursorStyle*/) override { return false; } // DECSCUSR
     bool SetCursorColor(const COLORREF /*color*/) override { return false; } // OSCSetCursorColor, OSCResetCursorColor
 
-    bool SetClipboard(std::wstring_view /*content*/) override { return false; } // OscSetClipboard
+    bool SetClipboard(wil::zwstring_view /*content*/) override { return false; } // OscSetClipboard
 
     // DTTERM_WindowManipulation
     bool WindowManipulation(const DispatchTypes::WindowManipulationType /*function*/,
@@ -124,6 +132,8 @@ public:
 
     bool DoFinalTermAction(const std::wstring_view /*string*/) override { return false; }
 
+    bool DoVsCodeAction(const std::wstring_view /*string*/) override { return false; }
+
     StringHandler DownloadDRCS(const VTInt /*fontNumber*/,
                                const VTParameter /*startChar*/,
                                const DispatchTypes::DrcsEraseControl /*eraseControl*/,
@@ -131,7 +141,10 @@ public:
                                const DispatchTypes::DrcsFontSet /*fontSet*/,
                                const DispatchTypes::DrcsFontUsage /*fontUsage*/,
                                const VTParameter /*cellHeight*/,
-                               const DispatchTypes::DrcsCharsetSize /*charsetSize*/) override { return nullptr; } // DECDLD
+                               const DispatchTypes::CharsetSize /*charsetSize*/) override { return nullptr; } // DECDLD
+
+    bool RequestUserPreferenceCharset() override { return false; } // DECRQUPSS
+    StringHandler AssignUserPreferenceCharset(const DispatchTypes::CharsetSize /*charsetSize*/) override { return nullptr; } // DECAUPSS
 
     StringHandler DefineMacro(const VTInt /*macroId*/,
                               const DispatchTypes::MacroDeleteControl /*deleteControl*/,
@@ -141,6 +154,9 @@ public:
     StringHandler RestoreTerminalState(const DispatchTypes::ReportFormat /*format*/) override { return nullptr; }; // DECRSTS
 
     StringHandler RequestSetting() override { return nullptr; }; // DECRQSS
+
+    bool RequestPresentationStateReport(const DispatchTypes::PresentationReportFormat /*format*/) override { return false; } // DECRQPSR
+    StringHandler RestorePresentationState(const DispatchTypes::PresentationReportFormat /*format*/) override { return nullptr; } // DECRSPS
 
     bool PlaySounds(const VTParameters /*parameters*/) override { return false; }; // DECPS
 };

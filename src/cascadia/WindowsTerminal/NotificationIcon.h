@@ -3,6 +3,7 @@
 
 #include "pch.h"
 
+#pragma once
 // This enumerates all the possible actions
 // that our notification icon context menu could do.
 enum class NotificationIconMenuItemAction
@@ -26,7 +27,7 @@ public:
     void ShowContextMenu(const til::point coord, const winrt::Windows::Foundation::Collections::IVectorView<winrt::Microsoft::Terminal::Remoting::PeasantInfo>& peasants);
     void MenuItemSelected(const HMENU menu, const UINT menuItemIndex);
 
-    WINRT_CALLBACK(SummonWindowRequested, winrt::delegate<void(winrt::Microsoft::Terminal::Remoting::SummonWindowSelectionArgs)>);
+    til::event<winrt::delegate<void(winrt::Microsoft::Terminal::Remoting::SummonWindowSelectionArgs)>> SummonWindowRequested;
 
 private:
     void _CreateWindow();

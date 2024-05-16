@@ -23,6 +23,42 @@ FontInfoDesired::FontInfoDesired(const FontInfo& fiFont) noexcept :
 {
 }
 
+void FontInfoDesired::SetCellSize(const CSSLengthPercentage& cellWidth, const CSSLengthPercentage& cellHeight) noexcept
+{
+    _cellWidth = cellWidth;
+    _cellHeight = cellHeight;
+}
+
+void FontInfoDesired::SetEnableBuiltinGlyphs(bool builtinGlyphs) noexcept
+{
+    _builtinGlyphs = builtinGlyphs;
+}
+
+void FontInfoDesired::SetEnableColorGlyphs(bool colorGlyphs) noexcept
+{
+    _colorGlyphs = colorGlyphs;
+}
+
+const CSSLengthPercentage& FontInfoDesired::GetCellWidth() const noexcept
+{
+    return _cellWidth;
+}
+
+const CSSLengthPercentage& FontInfoDesired::GetCellHeight() const noexcept
+{
+    return _cellHeight;
+}
+
+bool FontInfoDesired::GetEnableBuiltinGlyphs() const noexcept
+{
+    return _builtinGlyphs;
+}
+
+bool FontInfoDesired::GetEnableColorGlyphs() const noexcept
+{
+    return _colorGlyphs;
+}
+
 float FontInfoDesired::GetFontSize() const noexcept
 {
     return _fontSize;

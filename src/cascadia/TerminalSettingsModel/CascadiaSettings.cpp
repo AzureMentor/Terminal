@@ -13,8 +13,8 @@
 #include <WtExeUtils.h>
 
 #include <shellapi.h>
-#include <shlwapi.h>
 #include <til/latch.h>
+#include <til/env.h>
 
 using namespace winrt::Microsoft::Terminal;
 using namespace winrt::Microsoft::Terminal::Settings;
@@ -41,6 +41,16 @@ winrt::com_ptr<Profile> Model::implementation::CreateChild(const winrt::com_ptr<
     profile->Hidden(parent->Hidden());
     profile->AddLeastImportantParent(parent);
     return profile;
+}
+
+std::string_view Model::implementation::LoadStringResource(int resourceID)
+{
+    const HINSTANCE moduleInstanceHandle{ wil::GetModuleInstanceHandle() };
+    const auto resource = FindResourceW(moduleInstanceHandle, MAKEINTRESOURCEW(resourceID), RT_RCDATA);
+    const auto loaded = LoadResource(moduleInstanceHandle, resource);
+    const auto sz = SizeofResource(moduleInstanceHandle, resource);
+    const auto ptr = LockResource(loaded);
+    return { reinterpret_cast<const char*>(ptr), sz };
 }
 
 winrt::hstring CascadiaSettings::Hash() const noexcept
@@ -295,9 +305,10 @@ Model::Profile CascadiaSettings::DuplicateProfile(const Model::Profile& source)
     MTSM_PROFILE_SETTINGS(DUPLICATE_PROFILE_SETTINGS)
 #undef DUPLICATE_PROFILE_SETTINGS
 
-    // These two aren't in MTSM_PROFILE_SETTINGS because they're special
+    // These aren't in MTSM_PROFILE_SETTINGS because they're special
     DUPLICATE_SETTING_MACRO(TabColor);
     DUPLICATE_SETTING_MACRO(Padding);
+    DUPLICATE_SETTING_MACRO(Icon);
 
     {
         const auto font = source.FontInfo();
@@ -417,6 +428,7 @@ void CascadiaSettings::_validateSettings()
     _validateKeybindings();
     _validateColorSchemesInCommands();
     _validateThemeExists();
+    _validateProfileEnvironmentVariables();
 }
 
 // Method Description:
@@ -513,8 +525,12 @@ void CascadiaSettings::_validateMediaResources()
             }
         }
 
-        // Anything longer than 2 wchar_t's _isn't_ an emoji or symbol,
-        // so treat it as an invalid path.
+        // Anything longer than 2 wchar_t's _isn't_ an emoji or symbol, so treat
+        // it as an invalid path.
+        //
+        // Explicitly just use the Icon here, not the EvaluatedIcon. We don't
+        // want to blow up if we fell back to the commandline and the
+        // commandline _isn't an icon_.
         if (const auto icon = profile.Icon(); icon.size() > 2)
         {
             const auto iconPath{ wil::ExpandEnvironmentStringsW<std::wstring>(icon.c_str()) };
@@ -538,6 +554,30 @@ void CascadiaSettings::_validateMediaResources()
     if (invalidIcon)
     {
         _warnings.Append(SettingsLoadWarnings::InvalidIcon);
+    }
+}
+
+// Method Description:
+// - Checks if the profiles contain multiple environment variables with the same name, but different
+//   cases
+void CascadiaSettings::_validateProfileEnvironmentVariables()
+{
+    for (const auto& profile : _allProfiles)
+    {
+        std::set<std::wstring, til::env_key_sorter> envVarNames{};
+        if (profile.EnvironmentVariables() == nullptr)
+        {
+            continue;
+        }
+        for (const auto [key, value] : profile.EnvironmentVariables())
+        {
+            const auto iterator = envVarNames.insert(key.c_str());
+            if (!iterator.second)
+            {
+                _warnings.Append(SettingsLoadWarnings::InvalidProfileEnvironmentVariables);
+                return;
+            }
+        }
     }
 }
 
@@ -636,7 +676,7 @@ Model::Profile CascadiaSettings::_getProfileForCommandLine(const winrt::hstring&
 
             try
             {
-                _commandLinesCache.emplace_back(NormalizeCommandLine(cmd.c_str()), profile);
+                _commandLinesCache.emplace_back(Profile::NormalizeCommandLine(cmd.c_str()), profile);
             }
             CATCH_LOG()
         }
@@ -655,7 +695,7 @@ Model::Profile CascadiaSettings::_getProfileForCommandLine(const winrt::hstring&
 
     try
     {
-        const auto needle = NormalizeCommandLine(commandLine.c_str());
+        const auto needle = Profile::NormalizeCommandLine(commandLine.c_str());
 
         // til::starts_with(string, prefix) will always return false if prefix.size() > string.size().
         // --> Using binary search we can safely skip all items in _commandLinesCache where .first.size() > needle.size().
@@ -682,129 +722,6 @@ Model::Profile CascadiaSettings::_getProfileForCommandLine(const winrt::hstring&
     }
 
     return nullptr;
-}
-
-// Given a commandLine like the following:
-// * "C:\WINDOWS\System32\cmd.exe"
-// * "pwsh -WorkingDirectory ~"
-// * "C:\Program Files\PowerShell\7\pwsh.exe"
-// * "C:\Program Files\PowerShell\7\pwsh.exe -WorkingDirectory ~"
-//
-// This function returns:
-// * "C:\Windows\System32\cmd.exe"
-// * "C:\Program Files\PowerShell\7\pwsh.exe\0-WorkingDirectory\0~"
-// * "C:\Program Files\PowerShell\7\pwsh.exe"
-// * "C:\Program Files\PowerShell\7\pwsh.exe\0-WorkingDirectory\0~"
-//
-// The resulting strings are then used for comparisons in _getProfileForCommandLine().
-// For instance a resulting string of
-//   "C:\Program Files\PowerShell\7\pwsh.exe"
-// is considered a compatible profile with
-//   "C:\Program Files\PowerShell\7\pwsh.exe -WorkingDirectory ~"
-// as it shares the same (normalized) prefix.
-std::wstring CascadiaSettings::NormalizeCommandLine(LPCWSTR commandLine)
-{
-    // Turn "%SystemRoot%\System32\cmd.exe" into "C:\WINDOWS\System32\cmd.exe".
-    // We do this early, as environment variables might occur anywhere in the commandLine.
-    std::wstring normalized;
-    THROW_IF_FAILED(wil::ExpandEnvironmentStringsW(commandLine, normalized));
-
-    // One of the most important things this function does is to strip quotes.
-    // That way the commandLine "foo.exe -bar" and "\"foo.exe\" \"-bar\"" appear identical.
-    // We'll abuse CommandLineToArgvW for that as it's close to what CreateProcessW uses.
-    auto argc = 0;
-    wil::unique_hlocal_ptr<PWSTR[]> argv{ CommandLineToArgvW(normalized.c_str(), &argc) };
-    THROW_LAST_ERROR_IF(!argc);
-
-    // The index of the first argument in argv for our executable in argv[0].
-    // Given {"C:\Program Files\PowerShell\7\pwsh.exe", "-WorkingDirectory", "~"} this will be 1.
-    auto startOfArguments = 1;
-
-    // The given commandLine should start with an executable name or path.
-    // For instance given the following argv arrays:
-    // * {"C:\WINDOWS\System32\cmd.exe"}
-    // * {"pwsh", "-WorkingDirectory", "~"}
-    // * {"C:\Program", "Files\PowerShell\7\pwsh.exe"}
-    //               ^^^^
-    //   Notice how there used to be a space in the path, which was split by ExpandEnvironmentStringsW().
-    //   CreateProcessW() supports such atrocities, so we got to do the same.
-    // * {"C:\Program Files\PowerShell\7\pwsh.exe", "-WorkingDirectory", "~"}
-    //
-    // This loop tries to resolve relative paths, as well as executable names in %PATH%
-    // into absolute paths and normalizes them. The results for the above would be:
-    // * "C:\Windows\System32\cmd.exe"
-    // * "C:\Program Files\PowerShell\7\pwsh.exe"
-    // * "C:\Program Files\PowerShell\7\pwsh.exe"
-    // * "C:\Program Files\PowerShell\7\pwsh.exe"
-    for (;;)
-    {
-        // CreateProcessW uses RtlGetExePath to get the lpPath for SearchPathW.
-        // The difference between the behavior of SearchPathW if lpPath is nullptr and what RtlGetExePath returns
-        // seems to be mostly whether SafeProcessSearchMode is respected and the support for relative paths.
-        // Windows Terminal makes the use of relative paths rather impractical which is why we simply dropped the call to RtlGetExePath.
-        const auto status = wil::SearchPathW(nullptr, argv[0], L".exe", normalized);
-
-        if (status == S_OK)
-        {
-            const auto attributes = GetFileAttributesW(normalized.c_str());
-
-            if (attributes != INVALID_FILE_ATTRIBUTES && WI_IsFlagClear(attributes, FILE_ATTRIBUTE_DIRECTORY))
-            {
-                std::filesystem::path path{ std::move(normalized) };
-
-                // canonical() will resolve symlinks, etc. for us.
-                {
-                    std::error_code ec;
-                    auto canonicalPath = std::filesystem::canonical(path, ec);
-                    if (!ec)
-                    {
-                        path = std::move(canonicalPath);
-                    }
-                }
-
-                // std::filesystem::path has no way to extract the internal path.
-                // So about that.... I own you, computer. Give me that path.
-                normalized = std::move(const_cast<std::wstring&>(path.native()));
-                break;
-            }
-        }
-        // All other error types aren't handled at the moment.
-        else if (status != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND))
-        {
-            break;
-        }
-        // If the file path couldn't be found by SearchPathW this could be the result of us being given a commandLine
-        // like "C:\foo bar\baz.exe -arg" which is resolved to the argv array {"C:\foo", "bar\baz.exe", "-arg"},
-        // or we were erroneously given a directory to execute (e.g. someone ran `wt .`).
-        // Just like CreateProcessW() we thus try to concatenate arguments until we successfully resolve a valid path.
-        // Of course we can only do that if we have at least 2 remaining arguments in argv.
-        if ((argc - startOfArguments) < 2)
-        {
-            break;
-        }
-
-        // As described in the comment right above, we concatenate arguments in an attempt to resolve a valid path.
-        // The code below turns argv from {"C:\foo", "bar\baz.exe", "-arg"} into {"C:\foo bar\baz.exe", "-arg"}.
-        // The code abuses the fact that CommandLineToArgvW allocates all arguments back-to-back on the heap separated by '\0'.
-        argv[startOfArguments][-1] = L' ';
-        ++startOfArguments;
-    }
-
-    // We've (hopefully) finished resolving the path to the executable.
-    // We're now going to append all remaining arguments to the resulting string.
-    // If argv is {"C:\Program Files\PowerShell\7\pwsh.exe", "-WorkingDirectory", "~"},
-    // then we'll get "C:\Program Files\PowerShell\7\pwsh.exe\0-WorkingDirectory\0~"
-    if (startOfArguments < argc)
-    {
-        // normalized contains a canonical form of argv[0] at this point.
-        // -1 allows us to include the \0 between argv[0] and argv[1] in the call to append().
-        const auto beg = argv[startOfArguments] - 1;
-        const auto lastArg = argv[argc - 1];
-        const auto end = lastArg + wcslen(lastArg);
-        normalized.append(beg, end);
-    }
-
-    return normalized;
 }
 
 // Method Description:
@@ -1006,7 +923,7 @@ winrt::hstring CascadiaSettings::ApplicationDisplayName()
     }
     CATCH_LOG();
 
-    return RS_(L"ApplicationDisplayNameUnpackaged");
+    return IsPortableMode() ? RS_(L"ApplicationDisplayNamePortable") : RS_(L"ApplicationDisplayNameUnpackaged");
 }
 
 winrt::hstring CascadiaSettings::ApplicationVersion()
@@ -1015,12 +932,7 @@ winrt::hstring CascadiaSettings::ApplicationVersion()
     {
         const auto package{ winrt::Windows::ApplicationModel::Package::Current() };
         const auto version{ package.Id().Version() };
-        // As of about 2022, the ones digit of the Build of our version is a
-        // placeholder value to differentiate the Windows 10 build from the
-        // Windows 11 build. Let's trim that out. For additional clarity,
-        // let's omit the Revision, which _must_ be .0, and doesn't provide any
-        // value to report.
-        winrt::hstring formatted{ wil::str_printf<std::wstring>(L"%u.%u.%u", version.Major, version.Minor, version.Build / 10) };
+        winrt::hstring formatted{ wil::str_printf<std::wstring>(L"%u.%u.%u.%u", version.Major, version.Minor, version.Build, version.Revision) };
         return formatted;
     }
     CATCH_LOG();
@@ -1087,7 +999,21 @@ bool CascadiaSettings::IsDefaultTerminalAvailable() noexcept
     DWORDLONG dwlConditionMask = 0;
     VER_SET_CONDITION(dwlConditionMask, VER_BUILDNUMBER, VER_GREATER_EQUAL);
 
-    return VerifyVersionInfoW(&osver, VER_BUILDNUMBER, dwlConditionMask) != FALSE;
+    if (VerifyVersionInfoW(&osver, VER_BUILDNUMBER, dwlConditionMask) != FALSE)
+    {
+        return true;
+    }
+
+    static bool isOtherwiseAvailable = [] {
+        wil::unique_hkey key;
+        const auto lResult = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                                           L"SOFTWARE\\Microsoft\\SystemSettings\\SettingId\\SystemSettings_Developer_Mode_Setting_DefaultTerminalApp",
+                                           0,
+                                           KEY_READ,
+                                           &key);
+        return static_cast<bool>(key) && ERROR_SUCCESS == lResult;
+    }();
+    return isOtherwiseAvailable;
 }
 
 bool CascadiaSettings::IsDefaultTerminalSet() noexcept
@@ -1213,4 +1139,9 @@ void CascadiaSettings::_validateThemeExists()
             theme.DarkName(L"dark");
         }
     }
+}
+
+void CascadiaSettings::ExpandCommands()
+{
+    _globals->ExpandCommands(ActiveProfiles().GetView(), GlobalSettings().ColorSchemes());
 }

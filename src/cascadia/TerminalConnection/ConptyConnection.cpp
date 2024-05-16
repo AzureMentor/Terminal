@@ -5,11 +5,11 @@
 #include "ConptyConnection.h"
 
 #include <conpty-static.h>
+#include <til/string.h>
 #include <winternl.h>
 
 #include "CTerminalHandoff.h"
 #include "LibraryResources.h"
-#include "../../types/inc/Environment.hpp"
 #include "../../types/inc/utils.hpp"
 
 #include "ConptyConnection.g.cpp"
@@ -82,73 +82,53 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
                                                              nullptr));
 
         auto cmdline{ wil::ExpandEnvironmentStringsW<std::wstring>(_commandline.c_str()) }; // mutable copy -- required for CreateProcessW
-
-        Utils::EnvironmentVariableMapW environment;
-        auto zeroEnvMap = wil::scope_exit([&]() noexcept {
-            // Can't zero the keys, but at least we can zero the values.
-            for (auto& [name, value] : environment)
-            {
-                ::SecureZeroMemory(value.data(), value.size() * sizeof(decltype(value.begin())::value_type));
-            }
-
-            environment.clear();
-        });
-
-        // Populate the environment map with the current environment.
-        RETURN_IF_FAILED(Utils::UpdateEnvironmentMapW(environment));
+        auto environment = _initialEnv;
 
         {
-            // Convert connection Guid to string and ignore the enclosing '{}'.
-            auto wsGuid{ Utils::GuidToString(_guid) };
-            wsGuid.pop_back();
-
-            const auto guidSubStr = std::wstring_view{ wsGuid }.substr(1);
-
             // Ensure every connection has the unique identifier in the environment.
-            environment.insert_or_assign(L"WT_SESSION", guidSubStr.data());
+            // Convert connection Guid to string and ignore the enclosing '{}'.
+            environment.as_map().insert_or_assign(L"WT_SESSION", Utils::GuidToPlainString(_sessionId));
 
+            // The profile Guid does include the enclosing '{}'
+            environment.as_map().insert_or_assign(L"WT_PROFILE_ID", Utils::GuidToString(_profileGuid));
+
+            // WSLENV is a colon-delimited list of environment variables (+flags) that should appear inside WSL
+            // https://devblogs.microsoft.com/commandline/share-environment-vars-between-wsl-and-windows/
+            std::wstring wslEnv{ L"WT_SESSION:WT_PROFILE_ID:" };
             if (_environment)
             {
-                // add additional WT env vars like WT_SETTINGS, WT_DEFAULTS and WT_PROFILE_ID
-                for (auto item : _environment)
+                // Order the environment variable names so that resolution order is consistent
+                std::set<std::wstring, til::env_key_sorter> keys{};
+                for (const auto item : _environment)
+                {
+                    keys.insert(item.Key().c_str());
+                }
+                // add additional env vars
+                for (const auto& key : keys)
                 {
                     try
                     {
-                        auto key = item.Key();
                         // This will throw if the value isn't a string. If that
                         // happens, then just skip this entry.
-                        auto value = winrt::unbox_value<hstring>(item.Value());
+                        const auto value = winrt::unbox_value<hstring>(_environment.Lookup(key));
 
-                        // avoid clobbering WSLENV
-                        if (std::wstring_view{ key } == L"WSLENV")
-                        {
-                            auto current = environment[L"WSLENV"];
-                            value = current + L":" + value;
-                        }
-
-                        environment.insert_or_assign(key.c_str(), value.c_str());
+                        environment.set_user_environment_var(key.c_str(), value.c_str());
+                        // For each environment variable added to the environment, also add it to WSLENV
+                        wslEnv += key + L":";
                     }
                     CATCH_LOG();
                 }
             }
 
-            // WSLENV is a colon-delimited list of environment variables (+flags) that should appear inside WSL
-            // https://devblogs.microsoft.com/commandline/share-environment-vars-between-wsl-and-windows/
-
-            auto wslEnv = environment[L"WSLENV"];
-            wslEnv = L"WT_SESSION:" + wslEnv; // prepend WT_SESSION to make sure it's visible inside WSL.
-            environment.insert_or_assign(L"WSLENV", wslEnv);
+            // We want to prepend new environment variables to WSLENV - that way if a variable already
+            // exists in WSLENV but with a flag, the flag will be respected.
+            // (This behaviour was empirically observed)
+            wslEnv += environment.as_map()[L"WSLENV"];
+            environment.as_map().insert_or_assign(L"WSLENV", wslEnv);
         }
 
-        std::vector<wchar_t> newEnvVars;
-        auto zeroNewEnv = wil::scope_exit([&]() noexcept {
-            ::SecureZeroMemory(newEnvVars.data(),
-                               newEnvVars.size() * sizeof(decltype(newEnvVars.begin())::value_type));
-        });
-
-        RETURN_IF_FAILED(Utils::EnvironmentMapToEnvironmentStringsW(environment, newEnvVars));
-
-        auto lpEnvironment = newEnvVars.empty() ? nullptr : newEnvVars.data();
+        auto newEnvVars = environment.to_string();
+        const auto lpEnvironment = newEnvVars.empty() ? nullptr : newEnvVars.data();
 
         // If we have a startingTitle, create a mutable character buffer to add
         // it to the STARTUPINFO.
@@ -185,7 +165,7 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
             g_hTerminalConnectionProvider,
             "ConPtyConnected",
             TraceLoggingDescription("Event emitted when ConPTY connection is started"),
-            TraceLoggingGuid(_guid, "SessionGuid", "The WT_SESSION's GUID"),
+            TraceLoggingGuid(_sessionId, "SessionGuid", "The WT_SESSION's GUID"),
             TraceLoggingWideString(_clientName.c_str(), "Client", "The attached client process"),
             TraceLoggingKeyword(MICROSOFT_KEYWORD_MEASURES),
             TelemetryPrivacyDataTag(PDT_ProductAndServiceUsage));
@@ -200,13 +180,14 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
                                        const HANDLE hRef,
                                        const HANDLE hServerProcess,
                                        const HANDLE hClientProcess,
-                                       TERMINAL_STARTUP_INFO startupInfo) :
+                                       const TERMINAL_STARTUP_INFO& startupInfo) :
         _rows{ 25 },
         _cols{ 80 },
-        _guid{ Utils::CreateGuid() },
         _inPipe{ hIn },
         _outPipe{ hOut }
     {
+        _sessionId = Utils::CreateGuid();
+
         THROW_IF_FAILED(ConptyPackPseudoConsole(hServerProcess, hRef, hSig, &_hPC));
         _piClient.hProcess = hClientProcess;
 
@@ -227,28 +208,38 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
     Windows::Foundation::Collections::ValueSet ConptyConnection::CreateSettings(const winrt::hstring& cmdline,
                                                                                 const winrt::hstring& startingDirectory,
                                                                                 const winrt::hstring& startingTitle,
-                                                                                const Windows::Foundation::Collections::IMapView<hstring, hstring>& environment,
+                                                                                bool reloadEnvironmentVariables,
+                                                                                const winrt::hstring& initialEnvironment,
+                                                                                const Windows::Foundation::Collections::IMapView<hstring, hstring>& environmentOverrides,
                                                                                 uint32_t rows,
                                                                                 uint32_t columns,
-                                                                                const winrt::guid& guid)
+                                                                                const winrt::guid& guid,
+                                                                                const winrt::guid& profileGuid)
     {
         Windows::Foundation::Collections::ValueSet vs{};
 
         vs.Insert(L"commandline", Windows::Foundation::PropertyValue::CreateString(cmdline));
         vs.Insert(L"startingDirectory", Windows::Foundation::PropertyValue::CreateString(startingDirectory));
         vs.Insert(L"startingTitle", Windows::Foundation::PropertyValue::CreateString(startingTitle));
+        vs.Insert(L"reloadEnvironmentVariables", Windows::Foundation::PropertyValue::CreateBoolean(reloadEnvironmentVariables));
         vs.Insert(L"initialRows", Windows::Foundation::PropertyValue::CreateUInt32(rows));
         vs.Insert(L"initialCols", Windows::Foundation::PropertyValue::CreateUInt32(columns));
         vs.Insert(L"guid", Windows::Foundation::PropertyValue::CreateGuid(guid));
+        vs.Insert(L"profileGuid", Windows::Foundation::PropertyValue::CreateGuid(profileGuid));
 
-        if (environment)
+        if (environmentOverrides)
         {
             Windows::Foundation::Collections::ValueSet env{};
-            for (const auto& [k, v] : environment)
+            for (const auto& [k, v] : environmentOverrides)
             {
                 env.Insert(k, Windows::Foundation::PropertyValue::CreateString(v));
             }
             vs.Insert(L"environment", env);
+        }
+
+        if (!initialEnvironment.empty())
+        {
+            vs.Insert(L"initialEnvironment", Windows::Foundation::PropertyValue::CreateString(initialEnvironment));
         }
         return vs;
     }
@@ -261,28 +252,44 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
             // auto bad = unbox_value_or<hstring>(settings.TryLookup(L"foo").try_as<IPropertyValue>(), nullptr);
             // It'll just return null
 
-            _commandline = winrt::unbox_value_or<winrt::hstring>(settings.TryLookup(L"commandline").try_as<Windows::Foundation::IPropertyValue>(), _commandline);
-            _startingDirectory = winrt::unbox_value_or<winrt::hstring>(settings.TryLookup(L"startingDirectory").try_as<Windows::Foundation::IPropertyValue>(), _startingDirectory);
-            _startingTitle = winrt::unbox_value_or<winrt::hstring>(settings.TryLookup(L"startingTitle").try_as<Windows::Foundation::IPropertyValue>(), _startingTitle);
-            _rows = winrt::unbox_value_or<uint32_t>(settings.TryLookup(L"initialRows").try_as<Windows::Foundation::IPropertyValue>(), _rows);
-            _cols = winrt::unbox_value_or<uint32_t>(settings.TryLookup(L"initialCols").try_as<Windows::Foundation::IPropertyValue>(), _cols);
-            _guid = winrt::unbox_value_or<winrt::guid>(settings.TryLookup(L"guid").try_as<Windows::Foundation::IPropertyValue>(), _guid);
+            _commandline = unbox_prop_or<winrt::hstring>(settings, L"commandline", _commandline);
+            _startingDirectory = unbox_prop_or<winrt::hstring>(settings, L"startingDirectory", _startingDirectory);
+            _startingTitle = unbox_prop_or<winrt::hstring>(settings, L"startingTitle", _startingTitle);
+            _rows = unbox_prop_or<uint32_t>(settings, L"initialRows", _rows);
+            _cols = unbox_prop_or<uint32_t>(settings, L"initialCols", _cols);
+            _sessionId = unbox_prop_or<winrt::guid>(settings, L"sessionId", _sessionId);
             _environment = settings.TryLookup(L"environment").try_as<Windows::Foundation::Collections::ValueSet>();
-            if constexpr (Feature_VtPassthroughMode::IsEnabled())
+            _inheritCursor = unbox_prop_or<bool>(settings, L"inheritCursor", _inheritCursor);
+            _profileGuid = unbox_prop_or<winrt::guid>(settings, L"profileGuid", _profileGuid);
+
+            const auto& initialEnvironment{ unbox_prop_or<winrt::hstring>(settings, L"initialEnvironment", L"") };
+
+            const bool reloadEnvironmentVariables = unbox_prop_or<bool>(settings, L"reloadEnvironmentVariables", false);
+
+            if (reloadEnvironmentVariables)
             {
-                _passthroughMode = winrt::unbox_value_or<bool>(settings.TryLookup(L"passthroughMode").try_as<Windows::Foundation::IPropertyValue>(), _passthroughMode);
+                _initialEnv.regenerate();
+            }
+            else
+            {
+                if (!initialEnvironment.empty())
+                {
+                    _initialEnv = til::env{ initialEnvironment.c_str() };
+                }
+                else
+                {
+                    // If we were not explicitly provided an "initial" env block to
+                    // treat as our original one, then just use our actual current
+                    // env block.
+                    _initialEnv = til::env::from_current_environment();
+                }
             }
         }
 
-        if (_guid == guid{})
+        if (_sessionId == guid{})
         {
-            _guid = Utils::CreateGuid();
+            _sessionId = Utils::CreateGuid();
         }
-    }
-
-    winrt::guid ConptyConnection::Guid() const noexcept
-    {
-        return _guid;
     }
 
     winrt::hstring ConptyConnection::Commandline() const
@@ -303,13 +310,6 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
     void ConptyConnection::Start()
     try
     {
-        bool usingExistingBuffer = false;
-        if (_isStateAtOrBeyond(ConnectionState::Closed))
-        {
-            _resetConnectionState();
-            usingExistingBuffer = true;
-        }
-
         _transitionToState(ConnectionState::Connecting);
 
         const til::size dimensions{ gsl::narrow<til::CoordType>(_cols), gsl::narrow<til::CoordType>(_rows) };
@@ -318,24 +318,16 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
         // handoff from an already-started PTY process.
         if (!_inPipe)
         {
-            DWORD flags = PSEUDOCONSOLE_RESIZE_QUIRK | PSEUDOCONSOLE_WIN32_INPUT_MODE;
+            DWORD flags = PSEUDOCONSOLE_RESIZE_QUIRK;
 
             // If we're using an existing buffer, we want the new connection
             // to reuse the existing cursor. When not setting this flag, the
             // PseudoConsole sends a clear screen VT code which our renderer
             // interprets into making all the previous lines be outside the
             // current viewport.
-            if (usingExistingBuffer)
+            if (_inheritCursor)
             {
                 flags |= PSEUDOCONSOLE_INHERIT_CURSOR;
-            }
-
-            if constexpr (Feature_VtPassthroughMode::IsEnabled())
-            {
-                if (_passthroughMode)
-                {
-                    WI_SetFlag(flags, PSEUDOCONSOLE_PASSTHROUGH_MODE);
-                }
             }
 
             THROW_IF_FAILED(_CreatePseudoConsoleAndPipes(til::unwrap_coord_size(dimensions), flags, &_inPipe, &_outPipe, &_hPC));
@@ -362,7 +354,7 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
                 g_hTerminalConnectionProvider,
                 "ConPtyConnectedToDefterm",
                 TraceLoggingDescription("Event emitted when ConPTY connection is started, for a defterm session"),
-                TraceLoggingGuid(_guid, "SessionGuid", "The WT_SESSION's GUID"),
+                TraceLoggingGuid(_sessionId, "SessionGuid", "The WT_SESSION's GUID"),
                 TraceLoggingWideString(_clientName.c_str(), "Client", "The attached client process"),
                 TraceLoggingKeyword(MICROSOFT_KEYWORD_MEASURES),
                 TelemetryPrivacyDataTag(PDT_ProductAndServiceUsage));
@@ -413,15 +405,15 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
         winrt::hstring failureText{ fmt::format(std::wstring_view{ RS_(L"ProcessFailedToLaunch") },
                                                 fmt::format(_errorFormat, static_cast<unsigned int>(hr)),
                                                 _commandline) };
-        _TerminalOutputHandlers(failureText);
+        TerminalOutput.raise(failureText);
 
         // If the path was invalid, let's present an informative message to the user
         if (hr == HRESULT_FROM_WIN32(ERROR_DIRECTORY))
         {
             winrt::hstring badPathText{ fmt::format(std::wstring_view{ RS_(L"BadPathText") },
                                                     _startingDirectory) };
-            _TerminalOutputHandlers(L"\r\n");
-            _TerminalOutputHandlers(badPathText);
+            TerminalOutput.raise(L"\r\n");
+            TerminalOutput.raise(badPathText);
         }
 
         _transitionToState(ConnectionState::Failed);
@@ -440,11 +432,11 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
         {
             // GH#11556 - make sure to format the error code to this string as an UNSIGNED int
             winrt::hstring exitText{ fmt::format(std::wstring_view{ RS_(L"ProcessExited") }, fmt::format(_errorFormat, status)) };
-            _TerminalOutputHandlers(L"\r\n");
-            _TerminalOutputHandlers(exitText);
-            _TerminalOutputHandlers(L"\r\n");
-            _TerminalOutputHandlers(RS_(L"CtrlDToClose"));
-            _TerminalOutputHandlers(L"\r\n");
+            TerminalOutput.raise(L"\r\n");
+            TerminalOutput.raise(exitText);
+            TerminalOutput.raise(L"\r\n");
+            TerminalOutput.raise(RS_(L"CtrlDToClose"));
+            TerminalOutput.raise(L"\r\n");
         }
         CATCH_LOG();
     }
@@ -552,7 +544,7 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
                 // thread exit as fast as possible by aborting any ongoing writes coming from OpenConsole.
                 CancelSynchronousIo(_hOutputThread.get());
 
-                // Waiting for the output thread to exit ensures that all pending _TerminalOutputHandlers()
+                // Waiting for the output thread to exit ensures that all pending TerminalOutput.raise()
                 // calls have returned and won't notify our caller (ControlCore) anymore. This ensures that
                 // we don't call a destroyed event handler asynchronously from a background thread (GH#13880).
                 const auto result = WaitForSingleObject(_hOutputThread.get(), 1000);
@@ -666,7 +658,7 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
                 TraceLoggingWrite(g_hTerminalConnectionProvider,
                                   "ReceivedFirstByte",
                                   TraceLoggingDescription("An event emitted when the connection receives the first byte"),
-                                  TraceLoggingGuid(_guid, "SessionGuid", "The WT_SESSION's GUID"),
+                                  TraceLoggingGuid(_sessionId, "SessionGuid", "The WT_SESSION's GUID"),
                                   TraceLoggingFloat64(delta.count(), "Duration"),
                                   TraceLoggingKeyword(MICROSOFT_KEYWORD_MEASURES),
                                   TelemetryPrivacyDataTag(PDT_ProductAndServicePerformance));
@@ -674,7 +666,7 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
             }
 
             // Pass the output to our registered event handlers
-            _TerminalOutputHandlers(_u16Str);
+            TerminalOutput.raise(_u16Str);
         }
 
         return 0;
@@ -727,5 +719,4 @@ namespace winrt::Microsoft::Terminal::TerminalConnection::implementation
         co_await winrt::resume_background(); // move to background
         connection.reset(); // explicitly destruct
     }
-
 }

@@ -47,6 +47,18 @@ inline std::string JsonKey(const std::string_view key)
 
 namespace Microsoft::Terminal::Settings::Model::JsonUtils
 {
+    template<typename T>
+    struct ConversionTrait
+    {
+        // Forward-declare these so the linker can pick up specializations from elsewhere!
+        T FromJson(const Json::Value&);
+        bool CanConvert(const Json::Value& json);
+
+        Json::Value ToJson(const T& val);
+
+        std::string TypeDescription() const { return "<unknown>"; }
+    };
+
     namespace Detail
     {
         // Function Description:
@@ -238,18 +250,6 @@ namespace Microsoft::Terminal::Settings::Model::JsonUtils
         SetValueForKey(json, key, target, ConversionTrait<std::decay_t<T>>{});
     }
 
-    template<typename T>
-    struct ConversionTrait
-    {
-        // Forward-declare these so the linker can pick up specializations from elsewhere!
-        T FromJson(const Json::Value&);
-        bool CanConvert(const Json::Value& json);
-
-        Json::Value ToJson(const T& val);
-
-        std::string TypeDescription() const { return "<unknown>"; }
-    };
-
     template<>
     struct ConversionTrait<std::string>
     {
@@ -295,6 +295,62 @@ namespace Microsoft::Terminal::Settings::Model::JsonUtils
         std::string TypeDescription() const
         {
             return "string";
+        }
+    };
+
+    template<>
+    struct ConversionTrait<GUID>
+    {
+        GUID FromJson(const Json::Value& json)
+        {
+            return ::Microsoft::Console::Utils::GuidFromString(til::u8u16(Detail::GetStringView(json)).c_str());
+        }
+
+        bool CanConvert(const Json::Value& json)
+        {
+            if (!json.isString())
+            {
+                return false;
+            }
+
+            const auto string{ Detail::GetStringView(json) };
+            return string.length() == 38 && string.front() == '{' && string.back() == '}';
+        }
+
+        Json::Value ToJson(const GUID& val)
+        {
+            return til::u16u8(::Microsoft::Console::Utils::GuidToString(val));
+        }
+
+        std::string TypeDescription() const
+        {
+            return "guid";
+        }
+    };
+
+    // GUID and winrt::guid are mutually convertible,
+    // but IReference<winrt::guid> throws some of this off
+    template<>
+    struct ConversionTrait<winrt::guid>
+    {
+        winrt::guid FromJson(const Json::Value& json) const
+        {
+            return static_cast<winrt::guid>(ConversionTrait<GUID>{}.FromJson(json));
+        }
+
+        bool CanConvert(const Json::Value& json) const
+        {
+            return ConversionTrait<GUID>{}.CanConvert(json);
+        }
+
+        Json::Value ToJson(const winrt::guid& val)
+        {
+            return ConversionTrait<GUID>{}.ToJson(val);
+        }
+
+        std::string TypeDescription() const
+        {
+            return ConversionTrait<GUID>{}.TypeDescription();
         }
     };
 
@@ -637,6 +693,30 @@ namespace Microsoft::Terminal::Settings::Model::JsonUtils
     };
 
     template<>
+    struct ConversionTrait<uint64_t>
+    {
+        unsigned int FromJson(const Json::Value& json)
+        {
+            return json.asUInt();
+        }
+
+        bool CanConvert(const Json::Value& json)
+        {
+            return json.isUInt();
+        }
+
+        Json::Value ToJson(const uint64_t& val)
+        {
+            return val;
+        }
+
+        std::string TypeDescription() const
+        {
+            return "number (>= 0)";
+        }
+    };
+
+    template<>
     struct ConversionTrait<float>
     {
         float FromJson(const Json::Value& json)
@@ -649,8 +729,18 @@ namespace Microsoft::Terminal::Settings::Model::JsonUtils
             return json.isNumeric();
         }
 
-        Json::Value ToJson(const float& val)
+        Json::Value ToJson(const float val)
         {
+            // Convert floats that are almost integers to proper integers, because that looks way neater in JSON.
+            if (val >= static_cast<float>(Json::Value::minInt) && val <= static_cast<float>(Json::Value::maxInt))
+            {
+                const auto i = static_cast<Json::Value::Int>(std::lround(val));
+                const auto f = static_cast<float>(i);
+                if (std::fabs(f - val) < 1e-6f)
+                {
+                    return i;
+                }
+            }
             return val;
         }
 
@@ -673,70 +763,24 @@ namespace Microsoft::Terminal::Settings::Model::JsonUtils
             return json.isNumeric();
         }
 
-        Json::Value ToJson(const double& val)
+        Json::Value ToJson(const double val)
         {
+            // Convert floats that are almost integers to proper integers, because that looks way neater in JSON.
+            if (val >= static_cast<double>(Json::Value::minInt) && val <= static_cast<double>(Json::Value::maxInt))
+            {
+                const auto i = static_cast<Json::Value::Int>(std::lround(val));
+                const auto f = static_cast<double>(i);
+                if (std::fabs(f - val) < 1e-6)
+                {
+                    return i;
+                }
+            }
             return val;
         }
 
         std::string TypeDescription() const
         {
             return "number";
-        }
-    };
-
-    template<>
-    struct ConversionTrait<GUID>
-    {
-        GUID FromJson(const Json::Value& json)
-        {
-            return ::Microsoft::Console::Utils::GuidFromString(til::u8u16(Detail::GetStringView(json)).c_str());
-        }
-
-        bool CanConvert(const Json::Value& json)
-        {
-            if (!json.isString())
-            {
-                return false;
-            }
-
-            const auto string{ Detail::GetStringView(json) };
-            return string.length() == 38 && string.front() == '{' && string.back() == '}';
-        }
-
-        Json::Value ToJson(const GUID& val)
-        {
-            return til::u16u8(::Microsoft::Console::Utils::GuidToString(val));
-        }
-
-        std::string TypeDescription() const
-        {
-            return "guid";
-        }
-    };
-
-    // GUID and winrt::guid are mutually convertible,
-    // but IReference<winrt::guid> throws some of this off
-    template<>
-    struct ConversionTrait<winrt::guid>
-    {
-        winrt::guid FromJson(const Json::Value& json) const
-        {
-            return static_cast<winrt::guid>(ConversionTrait<GUID>{}.FromJson(json));
-        }
-
-        bool CanConvert(const Json::Value& json) const
-        {
-            return ConversionTrait<GUID>{}.CanConvert(json);
-        }
-
-        Json::Value ToJson(const winrt::guid& val)
-        {
-            return ConversionTrait<GUID>{}.ToJson(val);
-        }
-
-        std::string TypeDescription() const
-        {
-            return ConversionTrait<GUID>{}.TypeDescription();
         }
     };
 

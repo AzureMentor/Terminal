@@ -5,6 +5,8 @@
 
 #include "Peasant.g.h"
 #include "RenameRequestArgs.h"
+#include "AttachRequest.g.h"
+#include "RequestReceiveContentArgs.g.h"
 
 namespace RemotingUnitTests
 {
@@ -12,6 +14,31 @@ namespace RemotingUnitTests
 };
 namespace winrt::Microsoft::Terminal::Remoting::implementation
 {
+    struct AttachRequest : public AttachRequestT<AttachRequest>
+    {
+        WINRT_PROPERTY(winrt::hstring, Content);
+        WINRT_PROPERTY(uint32_t, TabIndex);
+
+    public:
+        AttachRequest(winrt::hstring content,
+                      uint32_t tabIndex) :
+            _Content{ content },
+            _TabIndex{ tabIndex } {};
+    };
+
+    struct RequestReceiveContentArgs : RequestReceiveContentArgsT<RequestReceiveContentArgs>
+    {
+        WINRT_PROPERTY(uint64_t, SourceWindow);
+        WINRT_PROPERTY(uint64_t, TargetWindow);
+        WINRT_PROPERTY(uint32_t, TabIndex);
+
+    public:
+        RequestReceiveContentArgs(const uint64_t src, const uint64_t tgt, const uint32_t tabIndex) :
+            _SourceWindow{ src },
+            _TargetWindow{ tgt },
+            _TabIndex{ tabIndex } {};
+    };
+
     struct Peasant : public PeasantT<Peasant>
     {
         Peasant();
@@ -32,26 +59,31 @@ namespace winrt::Microsoft::Terminal::Remoting::implementation
         void RequestQuitAll();
         void Quit();
 
+        void AttachContentToWindow(Remoting::AttachRequest request);
+
         winrt::Microsoft::Terminal::Remoting::WindowActivatedArgs GetLastActivatedArgs();
 
         winrt::Microsoft::Terminal::Remoting::CommandlineArgs InitialArgs();
 
-        winrt::hstring GetWindowLayout();
+        void SendContent(const winrt::Microsoft::Terminal::Remoting::RequestReceiveContentArgs& args);
+
+        til::typed_event<winrt::Windows::Foundation::IInspectable, winrt::Microsoft::Terminal::Remoting::WindowActivatedArgs> WindowActivated;
+        til::typed_event<winrt::Windows::Foundation::IInspectable, winrt::Microsoft::Terminal::Remoting::CommandlineArgs> ExecuteCommandlineRequested;
+        til::typed_event<> IdentifyWindowsRequested;
+        til::typed_event<> DisplayWindowIdRequested;
+        til::typed_event<winrt::Windows::Foundation::IInspectable, winrt::Microsoft::Terminal::Remoting::RenameRequestArgs> RenameRequested;
+        til::typed_event<winrt::Windows::Foundation::IInspectable, winrt::Microsoft::Terminal::Remoting::SummonWindowBehavior> SummonRequested;
+
+        til::typed_event<> ShowNotificationIconRequested;
+        til::typed_event<> HideNotificationIconRequested;
+        til::typed_event<> QuitAllRequested;
+        til::typed_event<> QuitRequested;
+
+        til::typed_event<winrt::Windows::Foundation::IInspectable, winrt::Microsoft::Terminal::Remoting::AttachRequest> AttachRequested;
+        til::typed_event<winrt::Windows::Foundation::IInspectable, winrt::Microsoft::Terminal::Remoting::RequestReceiveContentArgs> SendContentRequested;
 
         WINRT_PROPERTY(winrt::hstring, WindowName);
         WINRT_PROPERTY(winrt::hstring, ActiveTabTitle);
-
-        TYPED_EVENT(WindowActivated, winrt::Windows::Foundation::IInspectable, winrt::Microsoft::Terminal::Remoting::WindowActivatedArgs);
-        TYPED_EVENT(ExecuteCommandlineRequested, winrt::Windows::Foundation::IInspectable, winrt::Microsoft::Terminal::Remoting::CommandlineArgs);
-        TYPED_EVENT(IdentifyWindowsRequested, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable);
-        TYPED_EVENT(DisplayWindowIdRequested, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable);
-        TYPED_EVENT(RenameRequested, winrt::Windows::Foundation::IInspectable, winrt::Microsoft::Terminal::Remoting::RenameRequestArgs);
-        TYPED_EVENT(SummonRequested, winrt::Windows::Foundation::IInspectable, winrt::Microsoft::Terminal::Remoting::SummonWindowBehavior);
-        TYPED_EVENT(ShowNotificationIconRequested, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable);
-        TYPED_EVENT(HideNotificationIconRequested, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable);
-        TYPED_EVENT(QuitAllRequested, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable);
-        TYPED_EVENT(QuitRequested, winrt::Windows::Foundation::IInspectable, winrt::Windows::Foundation::IInspectable);
-        TYPED_EVENT(GetWindowLayoutRequested, winrt::Windows::Foundation::IInspectable, winrt::Microsoft::Terminal::Remoting::GetWindowLayoutArgs);
 
     private:
         Peasant(const uint64_t testPID);
@@ -69,4 +101,5 @@ namespace winrt::Microsoft::Terminal::Remoting::implementation
 namespace winrt::Microsoft::Terminal::Remoting::factory_implementation
 {
     BASIC_FACTORY(Peasant);
+    BASIC_FACTORY(RequestReceiveContentArgs);
 }

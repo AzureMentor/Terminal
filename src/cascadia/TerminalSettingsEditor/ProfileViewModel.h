@@ -4,13 +4,28 @@
 #pragma once
 
 #include "DeleteProfileEventArgs.g.h"
+#include "NavigateToProfileArgs.g.h"
 #include "ProfileViewModel.g.h"
 #include "Utils.h"
 #include "ViewModelHelpers.h"
-#include "Appearances.h"
 
 namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 {
+    struct NavigateToProfileArgs : NavigateToProfileArgsT<NavigateToProfileArgs>
+    {
+    public:
+        NavigateToProfileArgs(ProfileViewModel profile, Editor::IHostedInWindow windowRoot) :
+            _Profile(profile),
+            _WindowRoot(windowRoot) {}
+
+        Editor::IHostedInWindow WindowRoot() const noexcept { return _WindowRoot; }
+        Editor::ProfileViewModel Profile() const noexcept { return _Profile; }
+
+    private:
+        Editor::IHostedInWindow _WindowRoot;
+        Editor::ProfileViewModel _Profile{ nullptr };
+    };
+
     struct ProfileViewModel : ProfileViewModelT<ProfileViewModel>, ViewModelHelper<ProfileViewModel>
     {
     public:
@@ -23,7 +38,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         Model::TerminalSettings TermSettings() const;
         void DeleteProfile();
 
-        void SetupAppearances(Windows::Foundation::Collections::IObservableVector<Editor::ColorSchemeViewModel> schemesList, Editor::IHostedInWindow windowRoot);
+        void SetupAppearances(Windows::Foundation::Collections::IObservableVector<Editor::ColorSchemeViewModel> schemesList);
 
         // bell style bits
         bool IsBellStyleFlagSet(const uint32_t flag);
@@ -33,7 +48,7 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
 
         void SetAcrylicOpacityPercentageValue(double value)
         {
-            Opacity(winrt::Microsoft::Terminal::Settings::Editor::Converters::PercentageValueToPercentage(value));
+            Opacity(static_cast<float>(value) / 100.0f);
         };
 
         void SetPadding(double value)
@@ -41,10 +56,19 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
             Padding(to_hstring(value));
         }
 
+        winrt::hstring EvaluatedIcon() const
+        {
+            return _profile.EvaluatedIcon();
+        }
+
         // starting directory
         bool UseParentProcessDirectory();
         void UseParentProcessDirectory(const bool useParent);
         bool UseCustomStartingDirectory();
+
+        // icon
+        bool HideIcon();
+        void HideIcon(const bool hide);
 
         // general profile knowledge
         winrt::guid OriginalProfileGuid() const noexcept;
@@ -56,7 +80,12 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         bool ShowUnfocusedAppearance();
         void CreateUnfocusedAppearance();
         void DeleteUnfocusedAppearance();
-        bool VtPassthroughAvailable() const noexcept;
+
+        bool ShowMarksAvailable() const noexcept;
+        bool AutoMarkPromptsAvailable() const noexcept;
+        bool RepositionCursorWithMouseAvailable() const noexcept;
+
+        til::typed_event<Editor::ProfileViewModel, Editor::DeleteProfileEventArgs> DeleteProfileRequested;
 
         VIEW_MODEL_OBSERVABLE_PROPERTY(ProfileSubPage, CurrentPage);
 
@@ -70,7 +99,6 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         OBSERVABLE_PROJECTED_SETTING(_profile, TabTitle);
         OBSERVABLE_PROJECTED_SETTING(_profile, TabColor);
         OBSERVABLE_PROJECTED_SETTING(_profile, SuppressApplicationTitle);
-        OBSERVABLE_PROJECTED_SETTING(_profile, UseAcrylic);
         OBSERVABLE_PROJECTED_SETTING(_profile, ScrollState);
         OBSERVABLE_PROJECTED_SETTING(_profile, Padding);
         OBSERVABLE_PROJECTED_SETTING(_profile, Commandline);
@@ -81,34 +109,34 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         OBSERVABLE_PROJECTED_SETTING(_profile.DefaultAppearance(), SelectionBackground);
         OBSERVABLE_PROJECTED_SETTING(_profile.DefaultAppearance(), CursorColor);
         OBSERVABLE_PROJECTED_SETTING(_profile.DefaultAppearance(), Opacity);
+        OBSERVABLE_PROJECTED_SETTING(_profile.DefaultAppearance(), UseAcrylic);
         OBSERVABLE_PROJECTED_SETTING(_profile, HistorySize);
         OBSERVABLE_PROJECTED_SETTING(_profile, SnapOnInput);
         OBSERVABLE_PROJECTED_SETTING(_profile, AltGrAliasing);
         OBSERVABLE_PROJECTED_SETTING(_profile, BellStyle);
-        OBSERVABLE_PROJECTED_SETTING(_profile, UseAtlasEngine);
         OBSERVABLE_PROJECTED_SETTING(_profile, Elevate);
-        OBSERVABLE_PROJECTED_SETTING(_profile, VtPassthrough)
+        OBSERVABLE_PROJECTED_SETTING(_profile, ReloadEnvironmentVariables);
+        OBSERVABLE_PROJECTED_SETTING(_profile, RightClickContextMenu);
+        OBSERVABLE_PROJECTED_SETTING(_profile, ShowMarks);
+        OBSERVABLE_PROJECTED_SETTING(_profile, AutoMarkPrompts);
+        OBSERVABLE_PROJECTED_SETTING(_profile, RepositionCursorWithMouse);
 
         WINRT_PROPERTY(bool, IsBaseLayer, false);
         WINRT_PROPERTY(bool, FocusDeleteButton, false);
-        WINRT_PROPERTY(IHostedInWindow, WindowRoot, nullptr);
         GETSET_BINDABLE_ENUM_SETTING(AntiAliasingMode, Microsoft::Terminal::Control::TextAntialiasingMode, AntialiasingMode);
         GETSET_BINDABLE_ENUM_SETTING(CloseOnExitMode, Microsoft::Terminal::Settings::Model::CloseOnExitMode, CloseOnExit);
         GETSET_BINDABLE_ENUM_SETTING(ScrollState, Microsoft::Terminal::Control::ScrollbarState, ScrollState);
 
-        TYPED_EVENT(DeleteProfile, Editor::ProfileViewModel, Editor::DeleteProfileEventArgs);
-
     private:
         Model::Profile _profile;
-        winrt::guid _originalProfileGuid;
+        winrt::guid _originalProfileGuid{};
         winrt::hstring _lastBgImagePath;
         winrt::hstring _lastStartingDirectoryPath;
+        winrt::hstring _lastIcon;
         Editor::AppearanceViewModel _defaultAppearanceViewModel;
 
         static Windows::Foundation::Collections::IObservableVector<Editor::Font> _MonospaceFontList;
         static Windows::Foundation::Collections::IObservableVector<Editor::Font> _FontList;
-
-        static Editor::Font _GetFont(com_ptr<IDWriteLocalizedStrings> localizedFamilyNames);
 
         Model::CascadiaSettings _appSettings;
         Editor::AppearanceViewModel _unfocusedAppearanceViewModel;
@@ -127,9 +155,3 @@ namespace winrt::Microsoft::Terminal::Settings::Editor::implementation
         guid _ProfileGuid{};
     };
 };
-
-namespace winrt::Microsoft::Terminal::Settings::Editor::factory_implementation
-{
-    // Since we have static functions, we need a factory.
-    BASIC_FACTORY(ProfileViewModel);
-}

@@ -24,15 +24,19 @@ namespace Microsoft.Terminal.Settings.Model
         ActionAndArgs();
         ActionAndArgs(ShortcutAction action, IActionArgs args);
 
+        static String Serialize(IVector<ActionAndArgs> args);
+        static IVector<ActionAndArgs> Deserialize(String content);
+
         IActionArgs Args;
         ShortcutAction Action;
     };
 
-    [default_interface] runtimeclass Command : Windows.UI.Xaml.Data.INotifyPropertyChanged
+    [default_interface] runtimeclass Command : ISettingsModelObject
     {
         Command();
 
         String Name { get; };
+        String ID { get; };
         ActionAndArgs ActionAndArgs { get; };
         Microsoft.Terminal.Control.KeyChord Keys { get; };
         void RegisterKey(Microsoft.Terminal.Control.KeyChord keys);
@@ -43,9 +47,8 @@ namespace Microsoft.Terminal.Settings.Model
         Boolean HasNestedCommands { get; };
         Windows.Foundation.Collections.IMapView<String, Command> NestedCommands { get; };
 
-        static void ExpandCommands(Windows.Foundation.Collections.IMap<String, Command> commands,
-                                   Windows.Foundation.Collections.IVectorView<Profile> profiles,
-                                   Windows.Foundation.Collections.IVectorView<ColorScheme> schemes,
-                                   Windows.Foundation.Collections.IVector<SettingsLoadWarnings> warnings);
+        static IVector<Command> ParsePowerShellMenuComplete(String json, Int32 replaceLength);
+        static IVector<Command> HistoryToCommands(IVector<String> commandHistory, String commandline, Boolean directories);
+
     }
 }

@@ -42,9 +42,9 @@ til::point RenderData::GetTextBufferEndPosition() const noexcept
 //   the appropriate windowing.
 // Return Value:
 // - Text buffer with cell information for display
-const TextBuffer& RenderData::GetTextBuffer() const noexcept
+TextBuffer& RenderData::GetTextBuffer() const noexcept
 {
-    const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
     return gci.GetActiveOutputBuffer().GetTextBuffer();
 }
 
@@ -80,6 +80,16 @@ std::vector<Viewport> RenderData::GetSelectionRects() noexcept
 }
 
 // Method Description:
+// - Retrieves one rectangle per line describing the area of the viewport
+//   that should be highlighted
+// Return Value:
+// - Vector of rects describing the highlighted area
+std::span<const til::point_span> RenderData::GetSearchHighlights() const noexcept
+{
+    return {};
+}
+
+// Method Description:
 // - Lock the console for reading the contents of the buffer. Ensures that the
 //      contents of the console won't be changed in the middle of a paint
 //      operation.
@@ -87,14 +97,16 @@ std::vector<Viewport> RenderData::GetSelectionRects() noexcept
 //      they're done with any querying they need to do.
 void RenderData::LockConsole() noexcept
 {
-    ::LockConsole();
+    auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    gci.LockConsole();
 }
 
 // Method Description:
 // - Unlocks the console after a call to RenderData::LockConsole.
 void RenderData::UnlockConsole() noexcept
 {
-    ::UnlockConsole();
+    auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
+    gci.UnlockConsole();
 }
 
 // Method Description:
@@ -198,47 +210,6 @@ ULONG RenderData::GetCursorPixelWidth() const noexcept
     return ServiceLocator::LocateGlobals().cursorPixelWidth;
 }
 
-// Routine Description:
-// - Retrieves overlays to be drawn on top of the main screen buffer area.
-// - Overlays are drawn from first to last
-//  (the highest overlay should be given last)
-// Return Value:
-// - Iterable set of overlays
-const std::vector<Microsoft::Console::Render::RenderOverlay> RenderData::GetOverlays() const noexcept
-{
-    std::vector<Microsoft::Console::Render::RenderOverlay> overlays;
-
-    try
-    {
-        // First retrieve the IME information and build overlays.
-        const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-        const auto& ime = gci.ConsoleIme;
-
-        for (const auto& composition : ime.ConvAreaCompStr)
-        {
-            // Only send the overlay to the renderer on request if it's not supposed to be hidden at this moment.
-            if (!composition.IsHidden())
-            {
-                // This is holding the data.
-                const auto& textBuffer = composition.GetTextBuffer();
-
-                // The origin of the text buffer above (top left corner) is supposed to sit at this
-                // point within the visible viewport of the current window.
-                const auto origin = composition.GetAreaBufferInfo().coordConView;
-
-                // This is the area of the viewport that is actually in use relative to the text buffer itself.
-                // (e.g. 0,0 is the origin of the text buffer above, not the placement within the visible viewport)
-                const auto used = Viewport::FromInclusive(composition.GetAreaBufferInfo().rcViewCaWindow);
-
-                overlays.emplace_back(Microsoft::Console::Render::RenderOverlay{ textBuffer, origin, used });
-            }
-        }
-    }
-    CATCH_LOG();
-
-    return overlays;
-}
-
 // Method Description:
 // - Returns true if the cursor should be drawn twice as wide as usual because
 //      the cursor is currently over a cell with a double-wide character in it.
@@ -246,7 +217,7 @@ const std::vector<Microsoft::Console::Render::RenderOverlay> RenderData::GetOver
 // - <none>
 // Return Value:
 // - true if the cursor should be drawn twice as wide as usual
-bool RenderData::IsCursorDoubleWidth() const noexcept
+bool RenderData::IsCursorDoubleWidth() const
 {
     const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
     return gci.GetActiveOutputBuffer().CursorIsDoubleWidth();
@@ -261,26 +232,20 @@ bool RenderData::IsCursorDoubleWidth() const noexcept
 const bool RenderData::IsGridLineDrawingAllowed() noexcept
 {
     const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
-    // If virtual terminal output is set, grid line drawing is a must. It is always allowed.
-    if (WI_IsFlagSet(gci.GetActiveOutputBuffer().OutputMode, ENABLE_VIRTUAL_TERMINAL_PROCESSING))
+    const auto outputMode = gci.GetActiveOutputBuffer().OutputMode;
+    // If virtual terminal output is set, grid line drawing is a must. It is also enabled
+    // if someone explicitly asked for worldwide line drawing.
+    if (WI_IsAnyFlagSet(outputMode, ENABLE_VIRTUAL_TERMINAL_PROCESSING | ENABLE_LVB_GRID_WORLDWIDE))
     {
         return true;
     }
     else
     {
-        // If someone explicitly asked for worldwide line drawing, enable it.
-        if (gci.IsGridRenderingAllowedWorldwide())
-        {
-            return true;
-        }
-        else
-        {
-            // Otherwise, for compatibility reasons with legacy applications that used the additional CHAR_INFO bits by accident or for their own purposes,
-            // we must enable grid line drawing only in a DBCS output codepage. (Line drawing historically only worked in DBCS codepages.)
-            // The only known instance of this is Image for Windows by TeraByte, Inc. (TeraByte Unlimited) which used the bits accidentally and for no purpose
-            //   (according to the app developer) in conjunction with the Borland Turbo C cgscrn library.
-            return !!IsAvailableEastAsianCodePage(gci.OutputCP);
-        }
+        // Otherwise, for compatibility reasons with legacy applications that used the additional CHAR_INFO bits by accident or for their own purposes,
+        // we must enable grid line drawing only in a DBCS output codepage. (Line drawing historically only worked in DBCS codepages.)
+        // The only known instance of this is Image for Windows by TeraByte, Inc. (TeraByte Unlimited) which used the bits accidentally and for no purpose
+        //   (according to the app developer) in conjunction with the Borland Turbo C cgscrn library.
+        return !!IsAvailableEastAsianCodePage(gci.OutputCP);
     }
 }
 
@@ -375,6 +340,11 @@ void RenderData::SelectNewRegion(const til::point coordStart, const til::point c
     Selection::Instance().SelectNewRegion(coordStart, coordEnd);
 }
 
+const til::point_span* RenderData::GetSearchHighlightFocused() const noexcept
+{
+    return nullptr;
+}
+
 // Routine Description:
 // - Gets the current selection anchor position
 // Arguments:
@@ -423,17 +393,4 @@ const til::point RenderData::GetSelectionEnd() const noexcept
     const auto y_pos = (selectionRect.top == anchor.y) ? selectionRect.bottom : selectionRect.top;
 
     return { x_pos, y_pos };
-}
-
-// Routine Description:
-// - Given two points in the buffer space, color the selection between the two with the given attribute.
-// - This will create an internal selection rectangle covering the two points, assume a line selection,
-//   and use the first point as the anchor for the selection (as if the mouse click started at that point)
-// Arguments:
-// - coordSelectionStart - Anchor point (start of selection) for the region to be colored
-// - coordSelectionEnd - Other point referencing the rectangle inscribing the selection area
-// - attr - Color to apply to region.
-void RenderData::ColorSelection(const til::point coordSelectionStart, const til::point coordSelectionEnd, const TextAttribute attr)
-{
-    Selection::Instance().ColorSelection(coordSelectionStart, coordSelectionEnd, attr);
 }

@@ -14,6 +14,9 @@
     <UseWmXml>true</UseWmXml>
     <ConfigurationType>Application</ConfigurationType>
     <OpenConsoleCppWinRTProject>true</OpenConsoleCppWinRTProject>
+    <EnableHybridCRT>false</EnableHybridCRT> <!-- C++/CLI projects can't deal -->
+
+    <TerminalMUX>true</TerminalMUX>
 
     <!--
     These two properties are very important!
@@ -125,14 +128,11 @@
     </Reference>
   </ItemGroup>
 
-  <Import Project="$(OpenConsoleDir)\packages\Microsoft.UI.Xaml.$(TerminalMUXVersion)\build\native\Microsoft.UI.Xaml.targets" Condition="Exists('$(OpenConsoleDir)\packages\Microsoft.UI.Xaml.$(TerminalMUXVersion)\build\native\Microsoft.UI.Xaml.targets')" />
-
   <Import Project="$(OpenConsoleDir)\src\common.build.post.props" />
   <Import Project="$(OpenConsoleDir)\src\common.nugetversions.targets" />
 
   <ItemGroup>
     <TestDll Include="$(OpenConsoleCommonOutDir)\LocalTests_TerminalApp\TerminalApp.LocalTests.dll" />
-    <TestDll Include="$(OpenConsoleCommonOutDir)\LocalTests_SettingsModel\SettingsModel.LocalTests.dll" />
   </ItemGroup>
 
   <Target Name="AfterBuild" Inputs="@(TestDll)" Outputs="@(TestDll->'$(TargetDir)'\%(Filename)%(Extension)')">

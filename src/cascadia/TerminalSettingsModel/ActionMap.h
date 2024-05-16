@@ -20,7 +20,7 @@ Author(s):
 #include "Command.h"
 
 // fwdecl unittest classes
-namespace SettingsModelLocalTests
+namespace SettingsModelUnitTests
 {
     class KeyBindingsTests;
     class DeserializationTests;
@@ -66,14 +66,21 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
         void AddAction(const Model::Command& cmd);
 
         // JSON
-        static com_ptr<ActionMap> FromJson(const Json::Value& json);
-        std::vector<SettingsLoadWarnings> LayerJson(const Json::Value& json);
+        static com_ptr<ActionMap> FromJson(const Json::Value& json, const OriginTag origin = OriginTag::None);
+        std::vector<SettingsLoadWarnings> LayerJson(const Json::Value& json, const OriginTag origin, const bool withKeybindings = true);
         Json::Value ToJson() const;
 
         // modification
+        bool GenerateIDsForActions();
         bool RebindKeys(const Control::KeyChord& oldKeys, const Control::KeyChord& newKeys);
         void DeleteKeyBinding(const Control::KeyChord& keys);
         void RegisterKeyBinding(Control::KeyChord keys, Model::ActionAndArgs action);
+
+        Windows::Foundation::Collections::IVector<Model::Command> ExpandedCommands();
+        void ExpandCommands(const Windows::Foundation::Collections::IVectorView<Model::Profile>& profiles,
+                            const Windows::Foundation::Collections::IMapView<winrt::hstring, Model::ColorScheme>& schemes);
+
+        winrt::Windows::Foundation::Collections::IVector<Model::Command> FilterToSendInput(winrt::hstring currentCommandline);
 
     private:
         std::optional<Model::Command> _GetActionByID(const InternalActionID actionID) const;
@@ -90,10 +97,14 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
         void _TryUpdateName(const Model::Command& cmd, const Model::Command& oldCmd, const Model::Command& consolidatedCmd);
         void _TryUpdateKeyChord(const Model::Command& cmd, const Model::Command& oldCmd, const Model::Command& consolidatedCmd);
 
+        void _recursiveUpdateCommandKeybindingLabels();
+
         Windows::Foundation::Collections::IMap<hstring, Model::ActionAndArgs> _AvailableActionsCache{ nullptr };
         Windows::Foundation::Collections::IMap<hstring, Model::Command> _NameMapCache{ nullptr };
         Windows::Foundation::Collections::IMap<Control::KeyChord, Model::Command> _GlobalHotkeysCache{ nullptr };
         Windows::Foundation::Collections::IMap<Control::KeyChord, Model::Command> _KeyBindingMapCache{ nullptr };
+
+        Windows::Foundation::Collections::IVector<Model::Command> _ExpandedCommandsCache{ nullptr };
 
         std::unordered_map<winrt::hstring, Model::Command> _NestedCommands;
         std::vector<Model::Command> _IterableCommands;
@@ -113,8 +124,8 @@ namespace winrt::Microsoft::Terminal::Settings::Model::implementation
         //   than is necessary to be serialized.
         std::unordered_map<InternalActionID, Model::Command> _MaskingActions;
 
-        friend class SettingsModelLocalTests::KeyBindingsTests;
-        friend class SettingsModelLocalTests::DeserializationTests;
-        friend class SettingsModelLocalTests::TerminalSettingsTests;
+        friend class SettingsModelUnitTests::KeyBindingsTests;
+        friend class SettingsModelUnitTests::DeserializationTests;
+        friend class SettingsModelUnitTests::TerminalSettingsTests;
     };
 }

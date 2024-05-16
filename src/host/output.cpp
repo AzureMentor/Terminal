@@ -49,7 +49,7 @@ using namespace Microsoft::Console::Interactivity;
     // TODO: MSFT 9355013: This needs to be resolved. We increment it once with no handle to ensure it's never cleaned up
     // and one always exists for the renderer (and potentially other functions.)
     // It's currently a load-bearing piece of code. http://osgvsowi/9355013
-    if (NT_SUCCESS(Status))
+    if (SUCCEEDED_NTSTATUS(Status))
     {
         gci.ScreenBuffers[0].IncrementOriginalScreenBuffer();
     }
@@ -222,7 +222,12 @@ std::wstring ReadOutputStringW(const SCREEN_INFORMATION& screenInfo,
             // Otherwise, add anything that isn't a trailing cell. (Trailings are duplicate copies of the leading.)
             if (it->DbcsAttr() != DbcsAttribute::Trailing)
             {
-                retVal += it->Chars();
+                auto chars = it->Chars();
+                if (chars.size() > 1)
+                {
+                    chars = { &UNICODE_REPLACEMENT, 1 };
+                }
+                retVal += chars;
             }
         }
 
@@ -257,7 +262,7 @@ void ScreenBufferSizeChange(const til::size coordNewSize)
 
     try
     {
-        gci.pInputBuffer->Write(std::make_unique<WindowBufferSizeEvent>(coordNewSize));
+        gci.pInputBuffer->Write(SynthesizeWindowBufferSizeEvent(coordNewSize));
     }
     catch (...)
     {
@@ -291,41 +296,6 @@ static void _ScrollScreen(SCREEN_INFORMATION& screenInfo, const Viewport& source
     textBuffer.TriggerRedraw(target);
     // Also redraw anything that was filled.
     textBuffer.TriggerRedraw(fill);
-}
-
-// Routine Description:
-// - This routine is a special-purpose scroll for use by AdjustCursorPosition.
-// Arguments:
-// - screenInfo - reference to screen buffer info.
-// Return Value:
-// - true if we succeeded in scrolling the buffer, otherwise false (if we're out of memory)
-bool StreamScrollRegion(SCREEN_INFORMATION& screenInfo)
-{
-    // Rotate the circular buffer around and wipe out the previous final line.
-    const auto inVtMode = WI_IsFlagSet(screenInfo.OutputMode, ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-    auto fSuccess = screenInfo.GetTextBuffer().IncrementCircularBuffer(inVtMode);
-    if (fSuccess)
-    {
-        // Trigger a graphical update if we're active.
-        if (screenInfo.IsActiveScreenBuffer())
-        {
-            til::point coordDelta;
-            coordDelta.y = -1;
-
-            auto pNotifier = ServiceLocator::LocateAccessibilityNotifier();
-            if (pNotifier)
-            {
-                // Notify accessibility that a scroll has occurred.
-                pNotifier->NotifyConsoleUpdateScrollEvent(coordDelta.x, coordDelta.y);
-            }
-
-            if (ServiceLocator::LocateGlobals().pRender != nullptr)
-            {
-                ServiceLocator::LocateGlobals().pRender->TriggerScroll(&coordDelta);
-            }
-        }
-    }
-    return fSuccess;
 }
 
 // Routine Description:
@@ -493,8 +463,6 @@ void SetActiveScreenBuffer(SCREEN_INFORMATION& screenInfo)
 
     // Set window size.
     screenInfo.PostUpdateWindowSize();
-
-    gci.ConsoleIme.RefreshAreaAttributes();
 
     // Write data to screen.
     WriteToScreen(screenInfo, screenInfo.GetViewport());

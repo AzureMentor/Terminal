@@ -30,7 +30,6 @@ using Microsoft::Console::Interactivity::ServiceLocator;
 // - <none>
 void WriteToScreen(SCREEN_INFORMATION& screenInfo, const Viewport& region)
 {
-    DBGOUTPUT(("WriteToScreen\n"));
     const auto& gci = ServiceLocator::LocateGlobals().getConsoleInformation();
     // update to screen, if we're not iconic.
     if (!screenInfo.IsActiveScreenBuffer() || WI_IsFlagSet(gci.Flags, CONSOLE_IS_ICONIC))
@@ -52,8 +51,6 @@ void WriteToScreen(SCREEN_INFORMATION& screenInfo, const Viewport& region)
             ServiceLocator::LocateGlobals().pRender->TriggerRedraw(region);
         }
     }
-
-    WriteConvRegionToScreen(screenInfo, region);
 }
 
 // Routine Description:
@@ -66,7 +63,7 @@ void WriteToScreen(SCREEN_INFORMATION& screenInfo, const Viewport& region)
 // Return Value:
 // - S_OK, E_INVALIDARG or similar HRESULT error.
 [[nodiscard]] HRESULT ApiRoutines::WriteConsoleOutputAttributeImpl(IConsoleOutputObject& OutContext,
-                                                                   const gsl::span<const WORD> attrs,
+                                                                   const std::span<const WORD> attrs,
                                                                    const til::point target,
                                                                    size_t& used) noexcept
 {

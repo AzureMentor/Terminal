@@ -17,6 +17,10 @@
 
 // Block minwindef.h min/max macros to prevent <algorithm> conflict
 #define NOMINMAX
+// Exclude rarely-used stuff from Windows headers
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -25,7 +29,6 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
-#include <iomanip>
 #include <iterator>
 #include <list>
 #include <map>
@@ -39,7 +42,7 @@
 #include <regex>
 #include <set>
 #include <shared_mutex>
-#include <sstream>
+#include <span>
 #include <stdexcept>
 #include <string_view>
 #include <string>
@@ -51,22 +54,20 @@
 #include <vector>
 
 // WIL
-#include <wil/Common.h>
-#include <wil/Result.h>
-#include <wil/nt_result_macros.h>
-#include <wil/resource.h>
-#include <wil/wistd_memory.h>
-#include <wil/stl.h>
 #include <wil/com.h>
+#include <wil/stl.h>
 #include <wil/filesystem.h>
-#include <wil/win32_helpers.h>
+// Due to the use of RESOURCE_SUPPRESS_STL in result.h, we need to include resource.h first, which happens
+// implicitly through the includes above. If RESOURCE_SUPPRESS_STL is gone, the order doesn't matter anymore.
+#include <wil/result.h>
+#include <wil/nt_result_macros.h>
 
 // GSL
 // Block GSL Multi Span include because it both has C++17 deprecated iterators
 // and uses the C-namespaced "max" which conflicts with Windows definitions.
-#define GSL_MULTI_SPAN_H
 #include <gsl/gsl>
-#include <gsl/span_ext>
+#include <gsl/gsl_util>
+#include <gsl/pointers>
 
 // CppCoreCheck
 #include <CppCoreCheck/Warnings.h>

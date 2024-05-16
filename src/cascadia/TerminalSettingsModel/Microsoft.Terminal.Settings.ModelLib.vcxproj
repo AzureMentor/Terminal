@@ -20,6 +20,7 @@
   <Import Project="$(OpenConsoleDir)src\cppwinrt.build.pre.props" />
   <!-- ========================= Headers ======================== -->
   <ItemGroup>
+    <ClInclude Include="resource.h" />
     <ClInclude Include="ActionArgsMagic.h" />
     <ClInclude Include="NewTabMenuEntry.h">
       <DependentUpon>NewTabMenuEntry.idl</DependentUpon>
@@ -45,9 +46,6 @@
     <ClInclude Include="VisualStudioGenerator.h" />
     <ClInclude Include="DefaultTerminal.h">
       <DependentUpon>DefaultTerminal.idl</DependentUpon>
-    </ClInclude>
-    <ClInclude Include="IconPathConverter.h">
-      <DependentUpon>IconPathConverter.idl</DependentUpon>
     </ClInclude>
     <ClInclude Include="pch.h" />
     <ClInclude Include="ActionArgs.h">
@@ -121,9 +119,6 @@
     <ClCompile Include="VisualStudioGenerator.cpp" />
     <ClCompile Include="DefaultTerminal.cpp">
       <DependentUpon>DefaultTerminal.idl</DependentUpon>
-    </ClCompile>
-    <ClCompile Include="IconPathConverter.cpp">
-      <DependentUpon>IconPathConverter.idl</DependentUpon>
     </ClCompile>
     <ClCompile Include="init.cpp" />
     <ClCompile Include="pch.cpp">
@@ -229,7 +224,6 @@
     <Midl Include="Command.idl" />
     <Midl Include="DefaultTerminal.idl" />
     <Midl Include="GlobalAppSettings.idl" />
-    <Midl Include="IconPathConverter.idl" />
     <Midl Include="Profile.idl" />
     <Midl Include="EnumMappings.idl" />
     <Midl Include="TerminalSettings.idl" />
@@ -237,12 +231,16 @@
     <Midl Include="KeyChordSerialization.idl" />
     <Midl Include="AppearanceConfig.idl" />
     <Midl Include="IAppearanceConfig.idl" />
+    <Midl Include="ISettingsModelObject.idl" />
     <Midl Include="FontConfig.idl" />
   </ItemGroup>
   <!-- ========================= Misc Files ======================== -->
   <ItemGroup>
     <PRIResource Include="Resources\en-US\Resources.resw" />
     <OCResourceDirectory Include="Resources" />
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="Microsoft.Terminal.Settings.Model.rc" />
   </ItemGroup>
   <!-- ========================= Project References ======================== -->
   <ItemGroup>
@@ -311,13 +309,11 @@
     <ClCompile>
       <PrecompiledHeaderFile>pch.h</PrecompiledHeaderFile>
       <AdditionalIncludeDirectories>..;$(OpenConsoleDir)\dep\jsoncpp\json;%(AdditionalIncludeDirectories);</AdditionalIncludeDirectories>
-      <!-- Required for JsonUtils.h. -->
-      <AdditionalOptions>%(AdditionalOptions) /Zc:twoPhase-</AdditionalOptions>
       <!-- Manually disable unreachable code warning, because jconcpp has a ton of that. -->
       <DisableSpecificWarnings>4702;%(DisableSpecificWarnings)</DisableSpecificWarnings>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>WindowsApp.lib;user32.lib;shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>%(AdditionalDependencies);user32.lib</AdditionalDependencies>
     </Link>
     <Reference>
       <Private>false</Private>
@@ -327,24 +323,14 @@
   <Import Project="$(OpenConsoleDir)src\cppwinrt.build.post.props" />
   <Import Project="$(OpenConsoleDir)src\common.nugetversions.targets" />
 
-  <!-- This target will take our defaults.json and stamp it into a .h file that
-  we can include in the code directly. This way, we don't need to worry about
-  failing to load the default settings at runtime. -->
-  <Target Name="_TerminalAppGenerateDefaultsH" Inputs="defaults.json" Outputs="Generated Files\defaults.h" BeforeTargets="BeforeClCompile">
-    <Exec Command="pwsh.exe -NoProfile -ExecutionPolicy Unrestricted &quot;$(OpenConsoleDir)\tools\GenerateHeaderForJson.ps1&quot; -JsonFile defaults.json -OutPath &quot;Generated Files\defaults.h&quot; -VariableName DefaultJson" />
-  </Target>
-  <!-- A different set of defaults for Universal variant -->
-  <Target Name="_TerminalAppGenerateDefaultsUniversalH" Inputs="defaults-universal.json" Outputs="Generated Files\defaults-universal.h" BeforeTargets="BeforeClCompile">
-    <Exec Command="pwsh.exe -NoProfile -ExecutionPolicy Unrestricted &quot;$(OpenConsoleDir)\tools\GenerateHeaderForJson.ps1&quot; -JsonFile defaults-universal.json -OutPath &quot;Generated Files\defaults-universal.h&quot; -VariableName DefaultUniversalJson" />
-  </Target>
-  <!-- Same as above, but for the default settings.json template -->
-  <Target Name="_TerminalAppGenerateUserSettingsH" Inputs="userDefaults.json" Outputs="Generated Files\userDefaults.h" BeforeTargets="BeforeClCompile">
-    <Exec Command="pwsh.exe -NoProfile -ExecutionPolicy Unrestricted &quot;$(OpenConsoleDir)\tools\GenerateHeaderForJson.ps1&quot; -JsonFile userDefaults.json -OutPath &quot;Generated Files\userDefaults.h&quot; -VariableName UserSettingsJson" />
-  </Target>
-  <!-- Same as above, but for the enableColorSelection actions -->
-  <Target Name="_TerminalAppGenerateEnableColorSelectionSettingsH" Inputs="enableColorSelection.json" Outputs="Generated Files\enableColorSelection.h" BeforeTargets="BeforeClCompile">
-    <Exec Command="pwsh.exe -NoProfile -ExecutionPolicy Unrestricted &quot;$(OpenConsoleDir)\tools\GenerateHeaderForJson.ps1&quot; -JsonFile enableColorSelection.json -OutPath &quot;Generated Files\enableColorSelection.h&quot; -VariableName EnableColorSelectionSettingsJson" />
-  </Target>
+  <!-- PowerShell version check, outputs error if the wrong version is installed. -->
   <Import Project="$(SolutionDir)build\rules\CollectWildcardResources.targets" />
+  <Target Name="BeforeResourceCompile" Inputs="defaults.json;userDefaults.json;enableColorSelection.json" Outputs="Generated Files\defaults.json;Generated Files\userDefaults.json;Generated Files\enableColorSelection.json">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Unrestricted -File &quot;$(OpenConsoleDir)\tools\WindowsCheckPSVersion.ps1&quot;" />
+    <Exec Command="pwsh.exe -NoProfile -ExecutionPolicy Unrestricted &quot;$(OpenConsoleDir)\tools\CheckPSVersion.ps1&quot;" />
+    <Exec Command="pwsh.exe -NoProfile -ExecutionPolicy Unrestricted &quot;$(OpenConsoleDir)\tools\CompressJson.ps1&quot; -JsonFile defaults.json -OutPath &quot;Generated Files\defaults.json&quot;" />
+    <Exec Command="pwsh.exe -NoProfile -ExecutionPolicy Unrestricted &quot;$(OpenConsoleDir)\tools\CompressJson.ps1&quot; -JsonFile userDefaults.json -OutPath &quot;Generated Files\userDefaults.json&quot;" />
+    <Exec Command="pwsh.exe -NoProfile -ExecutionPolicy Unrestricted &quot;$(OpenConsoleDir)\tools\CompressJson.ps1&quot; -JsonFile enableColorSelection.json -OutPath &quot;Generated Files\enableColorSelection.json&quot;" />
+  </Target>
 
 </Project>

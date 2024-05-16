@@ -28,7 +28,6 @@ Modifications:
 
 #pragma once
 
-#include "TermControl.h"
 #include "ControlInteractivity.h"
 #include "TermControlAutomationPeer.g.h"
 #include "../types/TermControlUiaProvider.hpp"
@@ -37,6 +36,8 @@ Modifications:
 
 namespace winrt::Microsoft::Terminal::Control::implementation
 {
+    struct TermControl;
+
     struct TermControlAutomationPeer :
         public TermControlAutomationPeerT<TermControlAutomationPeer>,
         ::Microsoft::Console::Types::IUiaEventDispatcher
@@ -49,6 +50,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         void UpdateControlBounds();
         void SetControlPadding(const Core::Padding padding);
         void RecordKeyEvent(const WORD vkey);
+        void Close();
 
 #pragma region FrameworkElementAutomationPeer
         hstring GetClassNameCore() const;
